@@ -151,7 +151,8 @@ jobs:
 
   # The task runner on macOS, with the azad that a release ships. Isolated runs and the microVM sandbox need Linux, so
   # it runs Azad's own `test` task with the runner's tools, as a developer on a Mac would: the unit tests and the tests
-  # that need no sandbox. A second run must run nothing.
+  # that need no sandbox. A second run must run nothing. The label names the root's task alone: a short name would also
+  # evaluate //release, which walks the history that this shallow clone lacks.
   macos:
     needs: build-macos
     runs-on: macos-15
@@ -165,10 +166,10 @@ jobs:
       - run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Run the task test with the runner's tools
-        run: '"$RUNNER_TEMP/release/azad" run --output plain test'
+        run: '"$RUNNER_TEMP/release/azad" run --output plain //:test'
       - name: Run it again, which runs nothing
         run: |
-          "$RUNNER_TEMP/release/azad" run --output plain --report "$RUNNER_TEMP/again.json" test
+          "$RUNNER_TEMP/release/azad" run --output plain --report "$RUNNER_TEMP/again.json" //:test
           jq -e '.holds == true and .ran == 0' "$RUNNER_TEMP/again.json"
 
   # The release that this commit makes, which stage 0 computes from the whole history and the tags: empty when no
