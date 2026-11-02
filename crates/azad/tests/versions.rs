@@ -304,3 +304,19 @@ fn the_next_release_follows_the_conventional_commits_since_the_latest_one() {
     commit(dir, "feat: elsewhere", "2026-11-03T09:00:00Z");
     assert!(error(dir, "next_release()").contains("v1.20261102.0 is not among the 1000 first parents"));
 }
+
+/// The walk to the latest release reads more first parents at each step, so a release more commits back than the
+/// first step still bounds the commits that count.
+#[test]
+fn the_next_release_finds_a_release_beyond_the_first_step_of_the_walk() {
+    let repo = repository();
+    let dir = repo.path();
+    commit(dir, "feat!: before the release", "2026-11-01T08:00:00Z");
+    git(dir, &["tag", "v0.20261101.0"], "");
+    for minute in 0..30 {
+        commit(dir, &format!("docs: page {minute}"), &format!("2026-11-02T09:{minute:02}:00Z"));
+    }
+    assert_eq!(value(dir, "next_release()"), "None", "only docs since the release, 30 commits back");
+    commit(dir, "fix: a bug", "2026-11-02T10:00:00Z");
+    assert_eq!(value(dir, "next_release()"), "0.20261102.0", "the breaking change before the release does not count");
+}

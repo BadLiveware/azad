@@ -29,6 +29,9 @@ def latest_release(prefix = "v"):
 
 _BREAKING_FOOTERS = ["BREAKING CHANGE:", "BREAKING-CHANGE:"]
 
+# How many first parents each step of the walk to the latest release reads; it is usually a few commits back.
+_WALK_STEPS = [25, 100, 400]
+
 def conventional_commit(message):
     """The Conventional Commits header of `message`, as `(type, breaking)`; `(None, False)` when it has none.
 
@@ -53,13 +56,12 @@ def next_release(prefix = "v", commit = None, releasing = ["feat", "fix", "perf"
     most `window` of them, as a branch with squash merges or direct pushes has them."""
     commit = commit or git.commit()
     latest, tag = latest_release(prefix)
-    since = commit.first_parents(window)
+    released = None
     if latest:
         released = git.tags(tag)[tag]
-        ids = [parent.id for parent in since]
-        if released not in ids:
-            fail("next_release(): %s is not among the %d first parents of %s" % (tag, window, commit.id))
-        since = since[:ids.index(released)]
+    since = _since(commit, released, window)
+    if latest and since == None:
+        fail("next_release(): %s is not among the %d first parents of %s" % (tag, window, commit.id))
     headers = [conventional_commit(parent.message) for parent in since]
     breaking = len([kind for kind, is_breaking in headers if is_breaking]) > 0
     if not breaking and len([kind for kind, _ in headers if kind in releasing]) == 0:
@@ -72,3 +74,19 @@ def next_release(prefix = "v", commit = None, releasing = ["feat", "fix", "perf"
     day = commit.date.replace("-", "")
     same_day = [name for name in git.tags("%s%d.%s.*" % (prefix, major, day)) if semver.valid(name[len(prefix):])]
     return semver.parse("%d.%s.%d" % (major, day, len(same_day)))
+
+def _since(commit, released, window):
+    """The first parents of `commit` after the commit `released`, `commit` first; all of them, at most `window`, when
+    `released` is None. None when `released` is not among them. The walk reads more parents at each step, and stops
+    at `released` or at the first commit."""
+    chain = []
+    for size in [step for step in _WALK_STEPS if step < window] + [window]:
+        chain = commit.first_parents(size)
+        ids = [parent.id for parent in chain]
+        if released in ids:
+            return chain[:ids.index(released)]
+        if len(chain) < size:
+            break
+    if released:
+        return None
+    return chain
