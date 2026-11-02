@@ -64,12 +64,8 @@ Each kind of user needs one binary (decision 0029):
 | `azad-executor` | Hosts that run CI; its archive holds `azad-guest`, the init of its microVMs | Linux |
 | `azad-orchestrator` | The service that takes GitHub's events and runs their goals | Linux |
 
-| From | How |
-|---|---|
-| A release | Download `<binary>-<target>.tar.gz` from [Releases](https://github.com/BadLiveware/azad/releases), such as `azad-aarch64-apple-darwin.tar.gz`, and unpack it into a directory on your `PATH` |
-| An image | `COPY --from=ghcr.io/badliveware/azad-bin:main /azad /usr/local/bin/` in a Dockerfile; the image holds only `azad` |
-| A container | `docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined -v "$PWD:/work" -v azad:/root/.cache ghcr.io/badliveware/azad:main run --isolated check`; the image has `azad`, bubblewrap and git, the options let bubblewrap make its namespaces and mount `/proc`, and the volume keeps Azad's store |
-| The source | `cargo install --path crates/azad-cli --bin azad`; for GHA workflow files also `cargo build --release -p azad-gha-runner --target x86_64-unknown-linux-musl`, which a build of `azad` in this repository finds in `target/` |
+The binaries are in each [release](https://github.com/BadLiveware/azad/releases), one archive for each binary and system.
+`azad` is also in two OCI images: `ghcr.io/badliveware/azad-bin`, from `scratch`, which holds only `azad`, and `ghcr.io/badliveware/azad`, which adds bubblewrap and git.
 
 Each push to main that holds a feature, a fix or a breaking change is a release (decision 0030).
 A version is `<major>.<yyyymmdd>.<n>`: `major` counts breaking changes, then the date of the release, then the count of releases on that day.
