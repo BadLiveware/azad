@@ -20,6 +20,10 @@ const NOT_FOUND_TEXT: &str = "No such file or directory";
 /// Root entries that the sandbox makes itself, so the root file system does not provide them.
 const RESERVED_ROOT_ENTRIES: [&str; 4] = ["proc", "dev", "tmp", "work"];
 
+/// Why an isolated run cannot run on another system than Linux.
+const NEEDS_LINUX: &str = "isolated runs need Linux, because bubblewrap builds the sandbox from Linux namespaces; on this \
+                           system, `--local image` runs a task in its image through Docker or Podman";
+
 /// A sandbox that runs `bwrap` (bubblewrap) for each command.
 #[derive(Clone, Debug)]
 pub struct Bubblewrap {
@@ -132,6 +136,9 @@ fn dir_entries(root: &Path, reserved: &[&str]) -> Result<Vec<(String, RootEntry)
 
 impl Sandbox for Bubblewrap {
     fn run(&self, spec: &SandboxSpec, logs: &dyn LogSink) -> Result<Exit, SandboxError> {
+        if !cfg!(target_os = "linux") {
+            return Err(SandboxError::Setup(NEEDS_LINUX.to_owned()));
+        }
         let output = OutputFiles::create(&spec.stdout, &spec.stderr, &spec.log)?;
         let (mut status_reader, status_writer) = io::pipe().map_err(SandboxError::Spawn)?;
         let mut command = Command::new(&self.program);

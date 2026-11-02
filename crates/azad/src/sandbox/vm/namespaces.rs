@@ -10,6 +10,7 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 /// Starts `command` in a new user namespace and a new network namespace that the user namespace owns.
+#[cfg(target_os = "linux")]
 pub(super) fn in_new_namespaces(command: &mut Command) -> &mut Command {
     // SAFETY: the closure runs in the child between fork and exec; it calls one system call and does not allocate.
     unsafe {
@@ -20,6 +21,7 @@ pub(super) fn in_new_namespaces(command: &mut Command) -> &mut Command {
 
 /// Starts `command` in the user namespace and the network namespace of the open namespace files `user` and `net`.
 /// The user namespace comes first, because it gives the capabilities to enter the network namespace.
+#[cfg(target_os = "linux")]
 pub(super) fn in_namespaces(command: &mut Command, user: RawFd, net: RawFd) -> &mut Command {
     // SAFETY: the closure runs in the child between fork and exec; it calls two system calls on descriptors that the
     // parent keeps open, and does not allocate.
@@ -32,12 +34,33 @@ pub(super) fn in_namespaces(command: &mut Command, user: RawFd, net: RawFd) -> &
     command
 }
 
+/// Namespaces are a feature of Linux: elsewhere, `command` fails to start.
+#[cfg(not(target_os = "linux"))]
+pub(super) fn in_new_namespaces(command: &mut Command) -> &mut Command {
+    fails_to_start(command)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(super) fn in_namespaces(command: &mut Command, _user: RawFd, _net: RawFd) -> &mut Command {
+    fails_to_start(command)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn fails_to_start(command: &mut Command) -> &mut Command {
+    // SAFETY: the closure runs in the child between fork and exec, and only makes an error value.
+    unsafe {
+        command.pre_exec(|| Err(io::Error::new(io::ErrorKind::Unsupported, "network namespaces need Linux")));
+    }
+    command
+}
+
 /// The effective user and group of this process.
 pub(super) fn user_and_group() -> (u32, u32) {
     // SAFETY: plain system calls that cannot fail.
     unsafe { (libc::geteuid(), libc::getegid()) }
 }
 
+#[cfg(target_os = "linux")]
 fn check(result: libc::c_int) -> io::Result<()> {
     match result {
         0 => Ok(()),

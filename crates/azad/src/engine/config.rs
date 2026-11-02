@@ -158,6 +158,9 @@ const KIB_PER_MIB: u64 = 1024;
 /// CPU of the host, and [`VM_MEMORY_MIB`] or half of the host's memory when that is less; the guest takes the host's
 /// memory only as it uses it.
 pub(crate) fn vm_config(config: &EngineConfig) -> Result<VmConfig, EngineError> {
+    if !cfg!(target_os = "linux") {
+        return Err(EngineError::Config("the VM sandbox needs Linux with KVM".to_owned()));
+    }
     let kernel = env::var_os(KERNEL_ENV).filter(|path| !path.is_empty()).ok_or_else(|| {
         EngineError::Config(format!(
             "the VM sandbox needs a guest kernel: build it with `docker build --output type=local,dest=<dir> \
