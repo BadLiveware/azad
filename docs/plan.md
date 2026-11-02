@@ -35,11 +35,10 @@ Azad is tried on two repositories:
 
 People and CI get Azad without a Rust toolchain.
 
-- Static binaries (`azad`, `azad-gha-runner`, `azad-guest`) for Linux on x86_64 and aarch64, on each release.
-- Two OCI images: one from `scratch` that holds only the binaries, to copy them from, and one to run Azad in.
-- The Azad action downloads a release instead of building Azad.
+- Done: Azad releases itself on each green push to main that makes a release, versioned from Conventional Commits, and its CI runs on its latest release (decision 0030); a release has one archive for each binary, for Linux and macOS, and two images (decision 0029).
+- The Azad action downloads a release, by version or the latest, instead of taking the path of a binary.
 
-Done when: a workflow in another repository runs a goal with the action and no Rust toolchain, and a Dockerfile copies `azad` from the scratch image.
+Done when: a workflow in another repository runs a goal with the action and no Rust toolchain, and a Dockerfile copies `azad` from the `azad-bin` image.
 
 ### 2. Real GitHub
 

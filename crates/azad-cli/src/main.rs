@@ -20,7 +20,7 @@ const DEFAULT_GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
 const GITHUB_TOKEN_ENV: &str = "AZAD_GITHUB_TOKEN";
 
 #[derive(Debug, Parser)]
-#[command(name = "azad", version, about = "A task runner and CI system where work is a function of its inputs")]
+#[command(name = "azad", version = azad::VERSION, about = "A task runner and CI system where work is a function of its inputs")]
 struct Cli {
     /// The store directory. The default is $AZAD_STORE, or ~/.cache/azad.
     #[arg(long, global = true)]

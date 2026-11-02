@@ -65,6 +65,9 @@ function main() {
   const args = ["run", input("goal"), "--isolated", "--cache", input("cache"), "--output", "github", "--report", reportFile, "-j", input("jobs"), "--verbosity", input("verbosity")];
   // AZAD_CONFIG is empty, so that CI never reads personal defaults.
   const env = { ...process.env, AZAD_SIGNING_KEY: input("signing-key"), AZAD_GITHUB_TOKEN: input("github-token"), AZAD_CONFIG: "" };
+  if (input("force") === "true") {
+    args.push("--force");
+  }
   for (const filter of ["include", "exclude"]) {
     if (input(filter)) {
       args.push(`--${filter}`, input(filter));

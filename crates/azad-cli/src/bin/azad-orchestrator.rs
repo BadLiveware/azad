@@ -16,7 +16,7 @@ const DEFAULT_BRANCH: &str = "main";
 const WEBHOOK_SECRET_ENV: &str = "AZAD_WEBHOOK_SECRET";
 
 #[derive(Debug, Parser)]
-#[command(name = "azad-orchestrator", version, about = "Azad's orchestrator: runs goals for GitHub's events")]
+#[command(name = "azad-orchestrator", version = azad::VERSION, about = "Azad's orchestrator: runs goals for GitHub's events")]
 struct Cli {
     /// The store directory. The default is $AZAD_STORE, or ~/.cache/azad.
     #[arg(long, global = true)]

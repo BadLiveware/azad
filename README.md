@@ -71,7 +71,9 @@ Each kind of user needs one binary (decision 0029):
 | A container | `docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined -v "$PWD:/work" -v azad:/root/.cache ghcr.io/badliveware/azad:main run --isolated check`; the image has `azad`, bubblewrap and git, the options let bubblewrap make its namespaces and mount `/proc`, and the volume keeps Azad's store |
 | The source | `cargo install --path crates/azad-cli --bin azad`; for GHA workflow files also `cargo build --release -p azad-gha-runner --target x86_64-unknown-linux-musl`, which a build of `azad` in this repository finds in `target/` |
 
-The images have the tag `main` for the latest commit, `sha-<commit>` for each commit, and a version for each release.
+Each push to main that holds a feature, a fix or a breaking change is a release (decision 0030).
+A version is `<major>.<yyyymmdd>.<n>`: `major` counts breaking changes, then the date of the release, then the count of releases on that day.
+The images have the tags `main`, `sha-<commit>`, `latest`, and the version and the major of each release.
 
 ## First run
 

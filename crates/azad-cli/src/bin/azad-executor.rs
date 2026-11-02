@@ -13,7 +13,7 @@ use clap::{Parser, ValueEnum};
 #[derive(Debug, Parser)]
 #[command(
     name = "azad-executor",
-    version,
+    version = azad::VERSION,
     about = "Azad's executor: runs the actions that clients send, in sandboxes, until it is stopped"
 )]
 struct Cli {

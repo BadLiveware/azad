@@ -36,3 +36,10 @@ pub use engine::{
     SandboxKind, Severity, Status, TEXT_EXTENSION, TagFilter, default_tools, host_platform,
 };
 pub use trust::Trust;
+
+/// Azad's version: the release that a release build was made for, from `$AZAD_VERSION` when it is built (decision
+/// 0030), or the version of the crate.
+pub const VERSION: &str = match option_env!("AZAD_VERSION") {
+    Some(version) if !version.is_empty() => version,
+    _ => env!("CARGO_PKG_VERSION"),
+};

@@ -1,5 +1,15 @@
 name: CI
 
+# Azad checks, builds and releases itself, in GitHub Actions (decision 0030).
+#
+# - Stage 0, Azad's latest release, runs the checks: `//:check` and `//:examples`, which build and test this commit's
+#   own code. The repository variable AZAD_STAGE0 can name an older release, if the latest one cannot run them.
+# - Stage 0 computes the version of the release that this commit makes, from Conventional Commits (`//release:version`).
+# - The binaries and images are built with that version, and this commit's own azad runs `//:check` before anything
+#   is published.
+# - A push to main publishes the images when every job is green, and, when the commit makes a release, the GitHub
+#   release with one archive for each binary (decision 0029).
+
 on:
   push:
     branches: [main]
@@ -10,33 +20,61 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A run on main can be publishing; only a pull request's run gives way to a newer one.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # GHCR needs lowercase names.
+  RUN_IMAGE: ghcr.io/badliveware/azad
+  BIN_IMAGE: ghcr.io/badliveware/azad-bin
+  PUBLISH: ${{ github.event_name == 'push' }}
+  STAGE0_ARCHIVE: azad-x86_64-unknown-linux-musl.tar.gz
 
 jobs:
-  # Azad checks Azad: `//:check` and the task `examples` are the only checks of a change, in two jobs at the
-  # same time. Tasks with an image run isolated in it, with their results and cache volumes in the GitHub Actions
-  # cache; the sandbox tests and the examples run on the runner, which starts from a copy of their target/. The `build`
-  # job makes the azad that runs them.
-  build:
+  stage0:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: The latest release, or the one that AZAD_STAGE0 names
+        id: release
+        run: |
+          latest=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[].tagName')
+          if [ -z "$PINNED" ] && [ -z "$latest" ]; then
+            echo "No release yet: stage 0 is built from this commit."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir stage0
+          gh release download ${PINNED:+"$PINNED"} --repo "$GITHUB_REPOSITORY" --pattern "$STAGE0_ARCHIVE*" --dir stage0
+          (cd stage0 && sha256sum --check "$STAGE0_ARCHIVE.sha256" && tar -xzf "$STAGE0_ARCHIVE")
+          stage0/azad --version
+          echo "found=true" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PINNED: ${{ vars.AZAD_STAGE0 }}
+      - if: steps.release.outputs.found == 'false'
+        run: rustup show active-toolchain || rustup toolchain install
+      - if: steps.release.outputs.found == 'false'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # A release build: Azad hashes every file that it stores, and a debug build hashes about six times slower.
-      - run: cargo build --release -p azad-cli --locked
+      - if: steps.release.outputs.found == 'false'
+        run: |
+          cargo build --release -p azad-cli --bin azad --locked
+          mkdir stage0
+          cp target/release/azad stage0/azad
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: azad
-          path: target/release/azad
+          path: stage0/azad
           retention-days: 1
 
+  # `//:check` and `//:examples` are the checks of a change, in two jobs at the same time. Tasks with an image run
+  # isolated in it, with their results and cache volumes in the GitHub Actions cache; the sandbox tests and the examples
+  # run on the runner, which starts from a copy of their target/.
   self-build:
-    needs: build
+    needs: stage0
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -127,3 +165,248 @@ jobs:
         run: |
           target/release/azad run --output plain --report "$RUNNER_TEMP/again.json" test
           jq -e '.holds == true and .ran == 0' "$RUNNER_TEMP/again.json"
+
+  # The release that this commit makes, which stage 0 computes from the whole history and the tags: empty when no
+  # commit since the latest release is a feature, a fix or breaking. The binaries say `<version>`, or `0.0.0-dev+<sha>`.
+  version:
+    needs: stage0
+    runs-on: ubuntu-24.04
+    outputs:
+      release: ${{ steps.next.outputs.release }}
+      major: ${{ steps.next.outputs.major }}
+      build: ${{ steps.next.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: azad
+          path: ${{ runner.temp }}/azad
+      - id: next
+        run: |
+          chmod +x "$RUNNER_TEMP/azad/azad"
+          "$RUNNER_TEMP/azad/azad" run --output plain //release:version
+          release=$(cat release/out/version)
+          {
+            echo "release=$release"
+            echo "major=${release%%.*}"
+            echo "build=${release:-0.0.0-dev+${GITHUB_SHA::7}}"
+          } >> "$GITHUB_OUTPUT"
+          echo "This commit's release: ${release:-none}"
+
+  build-linux:
+    name: build (${{ matrix.arch }}-linux)
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, platform: linux/amd64, runner: ubuntu-24.04 }
+          - { arch: aarch64, platform: linux/arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - if: env.PUBLISH == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Binaries
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: dist
+          platforms: ${{ matrix.platform }}
+          build-args: AZAD_VERSION=${{ needs.version.outputs.build }}
+          outputs: type=local,dest=dist
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+      - name: Archives
+        run: |
+          archive() {
+            name="$1-${{ matrix.arch }}-unknown-linux-musl.tar.gz"
+            shift
+            tar -C dist -czf "archives/$name" "$@"
+            (cd archives && sha256sum "$name" > "$name.sha256")
+          }
+          mkdir archives
+          archive azad azad
+          archive azad-gha-runner azad-gha-runner
+          archive azad-executor azad-executor azad-guest
+          archive azad-orchestrator azad-orchestrator
+          for binary in azad azad-executor azad-orchestrator; do "dist/$binary" --version; done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries-${{ matrix.arch }}-linux
+          path: archives/
+
+      # The images go to the registry by digest only; the job `images` gives the two architectures their tags.
+      - name: Image with azad
+        id: bin
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: bin
+          platforms: ${{ matrix.platform }}
+          build-args: AZAD_VERSION=${{ needs.version.outputs.build }}
+          outputs: type=image,name=${{ env.BIN_IMAGE }},push-by-digest=true,name-canonical=true,push=${{ env.PUBLISH }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+      - name: Image to run azad in
+        id: run
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: azad
+          platforms: ${{ matrix.platform }}
+          build-args: AZAD_VERSION=${{ needs.version.outputs.build }}
+          outputs: type=image,name=${{ env.RUN_IMAGE }},push-by-digest=true,name-canonical=true,push=${{ env.PUBLISH }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }}-run,mode=max
+      - name: Digests
+        run: |
+          mkdir -p digests/bin digests/run
+          touch "digests/bin/${BIN_DIGEST#sha256:}" "digests/run/${RUN_DIGEST#sha256:}"
+          echo "$BIN_IMAGE" > digests/bin/.image
+          echo "$RUN_IMAGE" > digests/run/.image
+        env:
+          BIN_DIGEST: ${{ steps.bin.outputs.digest }}
+          RUN_DIGEST: ${{ steps.run.outputs.digest }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.arch }}
+          path: digests
+          include-hidden-files: true
+          retention-days: 1
+
+  # macOS gets the task runner alone: isolated runs and VMs need Linux.
+  build-macos:
+    name: build (${{ matrix.target }})
+    needs: version
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build --release --locked -p azad-cli --bin azad --target ${{ matrix.target }}
+        env:
+          AZAD_VERSION: ${{ needs.version.outputs.build }}
+          CARGO_PROFILE_RELEASE_STRIP: symbols
+      - name: Archive
+        run: |
+          name="azad-${{ matrix.target }}.tar.gz"
+          mkdir archives
+          tar -C target/${{ matrix.target }}/release -czf "archives/$name" azad
+          (cd archives && shasum -a 256 "$name" > "$name.sha256")
+      - if: matrix.target == 'aarch64-apple-darwin'
+        run: target/${{ matrix.target }}/release/azad --version
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries-${{ matrix.target }}
+          path: archives/
+
+  # This commit's own azad runs Azad's check before it is published, so a release never breaks stage 0 by itself. Stage
+  # 0 has just checked this commit and cached the results, so every task runs again (`force`); the cache volumes still
+  # come from the cache, so the builds are warm.
+  verify:
+    needs: build-linux
+    runs-on: ubuntu-24.04
+    env:
+      AZAD_DROP_OWN_BUILD: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries-x86_64-linux
+          path: ${{ runner.temp }}/release
+      - run: |
+          tar -C "$RUNNER_TEMP/release" -xzf "$RUNNER_TEMP/release/$STAGE0_ARCHIVE"
+          "$RUNNER_TEMP/release/azad" --version
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost > /dev/null 2>&1 &
+      - uses: ./
+        with:
+          goal: //:check
+          binary: ${{ runner.temp }}/release/azad
+          force: "true"
+
+  images:
+    needs: [version, build-linux, build-macos, verify, self-build, self-build-again, deny, macos]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image: [bin, run]
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digests-*
+          path: digests
+          merge-multiple: true
+      - id: name
+        run: echo "image=$(cat digests/${{ matrix.image }}/.image)" >> "$GITHUB_OUTPUT"
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.name.outputs.image }}
+          flavor: latest=false
+          tags: |
+            type=ref,event=branch
+            type=sha
+            type=raw,value=${{ needs.version.outputs.release }},enable=${{ needs.version.outputs.release != '' }}
+            type=raw,value=${{ needs.version.outputs.major }},enable=${{ needs.version.outputs.release != '' }}
+            type=raw,value=latest,enable=${{ needs.version.outputs.release != '' }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tags for both architectures
+        working-directory: digests/${{ matrix.image }}
+        run: |
+          tags=$(jq -cr '.tags | map("--tag " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          # shellcheck disable=SC2046,SC2086
+          docker buildx imagetools create $tags $(printf "$IMAGE@sha256:%s " *)
+          docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+
+  release:
+    needs: [version, images]
+    if: github.event_name == 'push' && needs.version.outputs.release != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: binaries-*
+          path: dist
+          merge-multiple: true
+      - name: GitHub release
+        run: |
+          tag="v$RELEASE"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$tag" --generate-notes dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ needs.version.outputs.release }}

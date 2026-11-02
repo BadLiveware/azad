@@ -27,6 +27,10 @@ inputs:
     description: "What Azad shows beyond results and errors, as `azad --verbosity` takes it: minimal, normal or diagnostic."
     required: false
     default: normal
+  force:
+    description: Whether to run every action that the goal needs again, even when its result is known, as `azad run --force`.
+    required: false
+    default: "false"
   include:
     description: Tags, separated by commas; only the tasks with one of them run, of those that the goal selects (decision 0023).
     required: false

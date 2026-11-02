@@ -106,4 +106,6 @@ Keep the direction of the dependencies:
 
 ## Before a commit
 
+Commit messages follow Conventional Commits (`feat:`, `fix:`, `perf:`, `docs:`, `ci:`, `test:`, `refactor:`, `chore:`, with `!` or a `BREAKING CHANGE:` line for a breaking change): they decide Azad's releases and versions (decision 0030).
+
 `cargo fmt --all`, `cargo clippy --workspace --all-targets`, and `cargo test --workspace` pass.
