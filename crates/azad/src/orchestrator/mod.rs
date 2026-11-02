@@ -155,7 +155,7 @@ impl Orchestrator {
                         self.process(id, &event);
                     }
                 }
-                Err(e) => eprintln!("azad serve: the runs cannot be read: {e}"),
+                Err(e) => eprintln!("azad-orchestrator: the runs cannot be read: {e}"),
             }
             let (lock, condvar) = &self.new_events;
             let Ok(new) = lock.lock() else { return };
@@ -168,7 +168,7 @@ impl Orchestrator {
     /// on its check runs and is done; it does not run again.
     fn process(&self, id: u64, event: &Event) {
         if let Err(e) = self.try_process(id, event) {
-            eprintln!("azad serve: run {id} failed: {e}");
+            eprintln!("azad-orchestrator: run {id} failed: {e}");
             if let Ok(Some(checks)) = self.runs.checks(id) {
                 for check in checks.values() {
                     let summary = format!("the orchestrator could not run the goal: {e}");
@@ -177,7 +177,7 @@ impl Orchestrator {
             }
         }
         if let Err(e) = self.runs.finish(id) {
-            eprintln!("azad serve: run {id} cannot be marked done: {e}");
+            eprintln!("azad-orchestrator: run {id} cannot be marked done: {e}");
         }
     }
 

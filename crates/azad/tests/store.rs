@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 
@@ -120,8 +119,11 @@ fn globs_select_files_and_drop_empty_directories() {
     assert_eq!(src.entries().keys().collect::<Vec<_>>(), ["main.rs"]);
 }
 
+// APFS refuses a name that is not UTF-8, so on macOS no such file can exist.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn a_name_that_is_not_utf8_is_refused() {
+    use std::os::unix::ffi::OsStrExt;
     let (dir, store) = store();
     let root = dir.path().join("src");
     fs::create_dir_all(&root).unwrap();

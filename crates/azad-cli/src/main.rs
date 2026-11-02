@@ -13,17 +13,14 @@ use std::sync::Arc;
 use azad::frontend::LocalRun;
 use azad::history::{GitHubHistory, History};
 
-use azad::{Engine, EngineConfig, SandboxKind};
+use azad::{Engine, EngineConfig};
 use clap::{Parser, Subcommand, ValueEnum};
 
-const DEFAULT_LISTEN: &str = "127.0.0.1:8484";
-const DEFAULT_WEBHOOK_URL: &str = "http://127.0.0.1:8484/webhook";
-const DEFAULT_BRANCH: &str = "main";
 const DEFAULT_GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
 const GITHUB_TOKEN_ENV: &str = "AZAD_GITHUB_TOKEN";
 
 #[derive(Debug, Parser)]
-#[command(name = "azad", version, about = "A CI system where work is a function of its inputs")]
+#[command(name = "azad", version, about = "A task runner and CI system where work is a function of its inputs")]
 struct Cli {
     /// The store directory. The default is $AZAD_STORE, or ~/.cache/azad.
     #[arg(long, global = true)]
@@ -40,12 +37,7 @@ struct Cli {
     /// Run tasks in their images, in a sandbox, as CI runs them. Without it, tasks run on this host with its tools.
     #[arg(long, global = true)]
     isolated: bool,
-    /// Where isolated tasks and other sandboxed actions run: bubblewrap on this host's kernel, or microVMs that the
-    /// actions share, which need Cloud Hypervisor, /dev/kvm and a guest kernel in $AZAD_VM_KERNEL; actions with network
-    /// in a VM also need slirp4netns and nft.
-    #[arg(long, global = true, value_enum, default_value_t = SandboxChoice::Bubblewrap)]
-    sandbox: SandboxChoice,
-    /// Run actions through the executor service on this Unix socket (`azad executor`), instead of in this process.
+    /// Run actions through the executor service on this Unix socket (`azad-executor`), instead of in this process.
     #[arg(long, global = true)]
     executor: Option<PathBuf>,
     /// The repository, as owner/name, whose history GitHub's API gives when this clone is shallow, with the token in
@@ -81,12 +73,6 @@ struct Cli {
 enum LocalChoice {
     Host,
     Image,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum SandboxChoice {
-    Bubblewrap,
-    Vm,
 }
 
 #[derive(Debug, Subcommand)]
@@ -173,35 +159,6 @@ enum Command {
         #[command(subcommand)]
         command: KeyCommand,
     },
-    /// Run the executor as a service on a Unix socket, until it is stopped. Other `azad` commands run their actions
-    /// through it with --executor; each of their connections is a sandbox group, which one VM serves with --sandbox vm.
-    Executor {
-        /// The Unix socket on which to listen.
-        #[arg(long)]
-        socket: PathBuf,
-    },
-    /// Run the orchestrator: take GitHub's webhooks for pushes and pull requests on /webhook, run the goals whose `on`
-    /// names the event, in their images and at the event's trust level, and write check runs, which `azad checks`
-    /// shows. Deliveries must be signed with the secret in $AZAD_WEBHOOK_SECRET.
-    Serve {
-        /// The address on which to listen.
-        #[arg(long, default_value = DEFAULT_LISTEN)]
-        listen: String,
-    },
-    /// Send an event from the workspace's git repository to `azad serve`, as GitHub would, signed with the secret in
-    /// $AZAD_WEBHOOK_SECRET.
-    Simulate {
-        #[command(subcommand)]
-        event: SimulatedEvent,
-        /// Where `azad serve` takes deliveries.
-        #[arg(long, default_value = DEFAULT_WEBHOOK_URL)]
-        server: String,
-        /// The default branch of the repository, whose pushes run at the trust level main.
-        #[arg(long, default_value = DEFAULT_BRANCH)]
-        default_branch: String,
-    },
-    /// List the check runs that `azad serve` wrote, oldest first.
-    Checks,
     /// Store a directory, and print the digest of its tree.
     Ingest { dir: PathBuf },
     /// Pull an image, and print its reference by digest, the form that image() takes, then the digest of its tree.
@@ -213,15 +170,6 @@ enum Command {
         #[arg(long)]
         platform: Option<String>,
     },
-}
-
-#[derive(Debug, Subcommand)]
-enum SimulatedEvent {
-    /// A push of a branch, at the commit that it holds now. The default is the branch that is checked out.
-    Push { branch: Option<String> },
-    /// A pull request from a branch, when it is opened or gets a new commit. The default is the branch that is checked
-    /// out.
-    PullRequest { number: u64, branch: Option<String> },
 }
 
 #[derive(Debug, Subcommand)]
@@ -270,10 +218,6 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     }
     let mut config = EngineConfig::from_environment(cli.store, cli.root)?;
     config.isolated = cli.isolated;
-    config.sandbox = match cli.sandbox {
-        SandboxChoice::Bubblewrap => SandboxKind::Bubblewrap,
-        SandboxChoice::Vm => SandboxKind::Vm,
-    };
     config.executor = cli.executor;
     config.history = github_history(cli.github_history.as_deref(), &cli.github_graphql_url)?;
     config.withheld = [remote::SIGNING_KEY_ENV, GITHUB_TOKEN_ENV]
@@ -289,18 +233,6 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Some(LocalChoice::Image) => Some(LocalRun::Image),
         None => personal.local()?,
     };
-    match &cli.command {
-        Command::Executor { socket } => return commands::serve_executor(&config, socket),
-        Command::Serve { listen } => return commands::serve(config, listen),
-        Command::Simulate { event: SimulatedEvent::Push { branch }, server, default_branch } => {
-            return commands::simulate_push(&config, server, default_branch, branch.as_deref());
-        }
-        Command::Simulate { event: SimulatedEvent::PullRequest { number, branch }, server, default_branch } => {
-            return commands::simulate_pull_request(&config, server, default_branch, *number, branch.as_deref());
-        }
-        Command::Checks => return commands::checks(&config),
-        _ => {}
-    }
     if let Command::Run { output, force, .. } = &cli.command {
         config.color = output::shows_color(*output);
         config.force = *force;
@@ -318,11 +250,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             commands::run(&engine, &target, jobs, output, verbosity, report, replay)
         }
         Command::List => commands::list(&engine),
-        Command::Key { .. }
-        | Command::Executor { .. }
-        | Command::Serve { .. }
-        | Command::Simulate { .. }
-        | Command::Checks => unreachable!("handled before the engine starts"),
+        Command::Key { .. } => unreachable!("handled before the engine starts"),
         Command::Why { target, action, next } => commands::why(&engine, &target, action.as_deref(), next, verbosity),
         Command::Log { target, action } => commands::log(&engine, &target, action.as_deref(), verbosity),
         Command::Check { target } => commands::check(&engine, &target),

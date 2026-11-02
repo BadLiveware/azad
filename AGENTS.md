@@ -57,7 +57,7 @@ Rules that follow from this:
 | Crate | Holds |
 |---|---|
 | `azad` | The library, as modules: `ir`, `store`, `scheduler` (rules, `decide`, the run loop, the `Backend` trait), `frontend` (the contract, and the Starlark, YAML, GHA and text frontends), `sandbox`, `local` (the local backend), `executor` (the executor as a service behind the plan, and its client), `orchestrator` (webhooks, durable runs and check runs), `remote` (remote caches and their providers), `trust` (trust levels), `oci`, `history`, `log`, and `engine`, which composes them |
-| `azad-cli` | The `azad` command: arguments and output only |
+| `azad-cli` | The commands, each for one kind of user (decision 0029): `azad`, the task runner; `azad-executor`; and `azad-orchestrator`. Arguments and output only |
 | `azad-gha-runner` | The GHA runner, a static binary that runs inside any image, with the GHA expression language (`expr`) and the job plan (`plan`), which the library uses too. It is a crate of its own because a musl build of the library would pull in everything else |
 | `azad-guest` | The init of the microVM sandbox, a static binary, and the protocol between it and the host (`protocol`), which the library uses too (decision 0018) |
 

@@ -12,7 +12,7 @@ Azad works as a task runner and as CI inside GitHub Actions (GHA), and its own o
 |---|---|
 | **Pipeline language** | Tasks and actions in Starlark (`tasks.star`), or as data in `tasks.yaml`; typed modules; a project's goals from parts (`@std//project.star`); versions from git history (`@std//version.star`); targets across packages, tags and filters; a dependency graph that each package declares, as coarse or as fine as it needs; simple GHA workflows, and GHA+ hints that make their steps cacheable |
 | **Core** | The Action IR (intermediate representation) in deterministic CBOR with SHA-256 digests; the store and the action cache as files, with trust levels; the rules that decide what must run; signed remote caches (a directory, the GHA cache); cache volumes that travel through the remote cache; `azad why`, `azad log`, and notes that say what Azad decided and why |
-| **Orchestrator** | Local only: webhooks in GitHub's format, durable runs, trust levels from the event, and check runs to a fake GitHub; `azad simulate` sends events from a local repository |
+| **Orchestrator** | Local only: webhooks in GitHub's format, durable runs, trust levels from the event, and check runs to a fake GitHub; `azad-orchestrator simulate` sends events from a local repository |
 | **Executor** | Tasks on the host's tools, or in their images through Docker or Podman, on the working tree; isolated actions in bubblewrap, or in Cloud Hypervisor microVMs with sandbox groups, volume disks and a network without root; the executor as a service behind the plan |
 
 Azad is tried on two repositories:

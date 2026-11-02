@@ -1,7 +1,8 @@
-use std::fs::{self, OpenOptions, Permissions};
+use std::fs::{self, File, OpenOptions, Permissions};
 use std::io;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::ir::{Digest, Directory, Node};
 use tempfile::TempDir;
@@ -124,6 +125,9 @@ impl Store {
             io::ErrorKind::NotFound => StoreError::Missing(*digest),
             _ => StoreError::io(&source, e),
         })?;
+        // On macOS, `fs::copy` clones the blob with its old modification time; a file that a checkout writes must be
+        // newer than any build that saw other content at its path (decision 0011).
+        File::open(dest).and_then(|file| file.set_modified(SystemTime::now())).map_err(|e| StoreError::io(dest, e))?;
         fs::set_permissions(dest, Permissions::from_mode(file_mode(executable))).map_err(|e| StoreError::io(dest, e))
     }
 }

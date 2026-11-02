@@ -1,6 +1,6 @@
-//! Check runs, as GitHub has them: one for each goal on a commit, which is queued, in progress, and then completed
-//! with a conclusion. Locally they go to a fake GitHub, which keeps them in files that `azad checks` shows; a client of
-//! GitHub's API takes the same calls later.
+//! Check runs, as GitHub has them: one for each goal on a commit, which is queued, in progress, and then completed with
+//! a conclusion. Locally they go to a fake GitHub, which keeps them in files that `azad-orchestrator checks` shows; a
+//! client of GitHub's API takes the same calls later.
 
 use std::fmt;
 use std::fs;

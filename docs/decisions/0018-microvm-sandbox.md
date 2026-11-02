@@ -41,3 +41,7 @@ A runner that runs GHA jobs in VMs never sends work across the VM boundary, beca
 ## Amendment, 2026-11-01
 
 Decision 0019 replaces one VM for each run with one VM for each sandbox group, whose runs share it, and adds network and cache volumes.
+
+## Amendment, 2026-11-03
+
+Decision 0029 moves the microVM sandbox out of `azad`: `azad-executor --sandbox vm` runs it, and `azad --executor <socket>` sends a goal there.

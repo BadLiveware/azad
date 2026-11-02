@@ -344,7 +344,7 @@ fn in_github_actions_the_annotations_of_a_task_name_files_in_the_repository_and_
     assert!(!stopped("::warning file=svc/lib/util.py,line=1,col=2::careful"), "{lines:#?}");
 }
 
-/// An executor service that `azad executor` runs, stopped when the test ends.
+/// An executor service that `azad-executor` runs, stopped when the test ends.
 struct Executor {
     process: std::process::Child,
     socket: std::path::PathBuf,
@@ -353,8 +353,8 @@ struct Executor {
 impl Executor {
     fn start(workspace: &Path) -> Executor {
         let socket = workspace.join(".store-executor.sock");
-        let process = Command::new(env!("CARGO_BIN_EXE_azad"))
-            .args(["--store", &workspace.join(".store").display().to_string(), "executor", "--socket"])
+        let process = Command::new(env!("CARGO_BIN_EXE_azad-executor"))
+            .args(["--store", &workspace.join(".store").display().to_string(), "--socket"])
             .arg(&socket)
             .current_dir(workspace)
             .stderr(std::process::Stdio::null())
@@ -401,7 +401,7 @@ fn a_goal_runs_through_the_executor_process_and_its_results_are_cached_by_the_cl
 
 const WEBHOOK_SECRET: &str = "a shared secret";
 
-/// `azad serve`, which prints where it takes webhooks, stopped when the test ends.
+/// `azad-orchestrator serve`, which prints where it takes webhooks, stopped when the test ends.
 struct Server {
     process: std::process::Child,
     url: String,
@@ -409,16 +409,17 @@ struct Server {
 
 impl Server {
     fn start(workspace: &Path) -> Server {
-        let mut process = Command::new(env!("CARGO_BIN_EXE_azad"))
+        let mut process = Command::new(env!("CARGO_BIN_EXE_azad-orchestrator"))
             .args(["--store", &workspace.join(".store").display().to_string(), "serve", "--listen", "127.0.0.1:0"])
             .env("AZAD_WEBHOOK_SECRET", WEBHOOK_SECRET)
             .current_dir(workspace)
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .expect("azad serve starts");
+            .expect("the orchestrator starts");
         let mut line = String::new();
         let stderr = process.stderr.take().expect("the standard error is piped");
-        std::io::BufRead::read_line(&mut std::io::BufReader::new(stderr), &mut line).expect("azad serve says where");
+        std::io::BufRead::read_line(&mut std::io::BufReader::new(stderr), &mut line)
+            .expect("the orchestrator says where");
         let url = line.split_whitespace().last().expect("a URL").to_owned();
         Server { process, url }
     }
@@ -450,23 +451,26 @@ fn a_simulated_pull_request_gets_a_check_run_and_no_task_runs_on_the_host() {
     git(&["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "first"]);
     let server = Server::start(dir.path());
 
-    let simulate = Command::new(env!("CARGO_BIN_EXE_azad"))
-        .args([
-            "--store",
-            &dir.path().join(".store").display().to_string(),
-            "--root",
-            &dir.path().display().to_string(),
-        ])
-        .args(["simulate", "--server", &server.url, "pull-request", "1"])
-        .env("AZAD_WEBHOOK_SECRET", WEBHOOK_SECRET)
-        .current_dir(dir.path())
-        .output()
-        .expect("azad simulate starts");
+    let orchestrator = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_azad-orchestrator"))
+            .args([
+                "--store",
+                &dir.path().join(".store").display().to_string(),
+                "--root",
+                &dir.path().display().to_string(),
+            ])
+            .args(args)
+            .env("AZAD_WEBHOOK_SECRET", WEBHOOK_SECRET)
+            .current_dir(dir.path())
+            .output()
+            .expect("the orchestrator starts")
+    };
+    let simulate = orchestrator(&["simulate", "--server", &server.url, "pull-request", "1"]);
     assert!(simulate.status.success(), "{}", stderr(&simulate));
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let checks = loop {
-        let listed = stdout(&azad(dir.path(), &["checks"]));
+        let listed = stdout(&orchestrator(&["checks"]));
         if listed.starts_with("failure") || listed.starts_with("success") {
             break listed;
         }

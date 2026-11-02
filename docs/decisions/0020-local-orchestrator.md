@@ -49,3 +49,7 @@ A pull request runs code that its author wrote; if its results went into the cac
 - The webhook intake is a small HTTP/1.1 reader in the library (one request per connection, a body of at most 25 MiB), so that the orchestrator needs no web framework; HTTPS comes from a proxy in front of it, as GitHub requires it.
 - Azad's own goals do not name events yet: its sandbox tests run on the host, which needs bubblewrap, so the orchestrator would refuse them.
 - The GHA frontend does not give workflows events from their `on:` yet; that would let Azad run a repository's existing workflows on simulated events.
+
+## Amendment, 2026-11-03
+
+Decision 0029 makes the orchestrator its own binary: `azad serve`, `azad simulate` and `azad checks` are now `azad-orchestrator serve`, `simulate` and `checks`, and it no longer reads personal defaults.

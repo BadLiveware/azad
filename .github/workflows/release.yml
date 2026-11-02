@@ -1,7 +1,10 @@
 name: Release
 
-# Builds Azad's static binaries and its two images (see the Dockerfile) for x86_64 and aarch64, each on a runner of its
-# own architecture, so no Rust code builds under emulation.
+# Builds Azad's binaries and its two images (see the Dockerfile). Each kind of user gets an archive of its own
+# (decision 0029): `azad`, the task runner; `azad-gha-runner`, for GHA workflow files; `azad-executor` with
+# `azad-guest`, for CI hosts; and `azad-orchestrator`. Linux builds are static, for x86_64 and aarch64, each on a runner
+# of its own architecture, so no Rust code builds under emulation. macOS gets the task runner only, because isolated
+# runs and VMs need Linux.
 #
 # - A pull request builds everything and publishes nothing.
 # - A push to main publishes the images as `main` and `sha-<commit>`, and keeps the binaries as artifacts of the run.
@@ -54,24 +57,32 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          target: bin
+          target: dist
           platforms: ${{ matrix.platform }}
           outputs: type=local,dest=dist
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,scope=${{ matrix.arch }},mode=max
-      - name: Archive
+      - name: Archives
         run: |
-          archive="azad-${{ matrix.arch }}-unknown-linux-musl.tar.gz"
-          tar -C dist -czf "$archive" azad azad-gha-runner azad-guest
-          sha256sum "$archive" > "$archive.sha256"
-          dist/azad --version
+          archive() {
+            name="$1-${{ matrix.arch }}-unknown-linux-musl.tar.gz"
+            shift
+            tar -C dist -czf "archives/$name" "$@"
+            (cd archives && sha256sum "$name" > "$name.sha256")
+          }
+          mkdir archives
+          archive azad azad
+          archive azad-gha-runner azad-gha-runner
+          archive azad-executor azad-executor azad-guest
+          archive azad-orchestrator azad-orchestrator
+          for binary in azad azad-executor azad-orchestrator; do "dist/$binary" --version; done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: binaries-${{ matrix.arch }}
-          path: azad-${{ matrix.arch }}-unknown-linux-musl.tar.gz*
+          name: binaries-${{ matrix.arch }}-linux
+          path: archives/
 
       # The images go to the registry by digest only; the job `images` gives the two architectures one tag.
-      - name: Image with the binaries
+      - name: Image with azad
         id: bin
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -105,6 +116,37 @@ jobs:
           path: digests
           include-hidden-files: true
           retention-days: 1
+
+
+  macos:
+    name: build (${{ matrix.target }})
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build --release --locked -p azad-cli --bin azad --target ${{ matrix.target }}
+        env:
+          CARGO_PROFILE_RELEASE_STRIP: symbols
+      - name: Archive
+        run: |
+          name="azad-${{ matrix.target }}.tar.gz"
+          mkdir archives
+          tar -C target/${{ matrix.target }}/release -czf "archives/$name" azad
+          (cd archives && shasum -a 256 "$name" > "$name.sha256")
+      - if: matrix.target == 'aarch64-apple-darwin'
+        run: target/${{ matrix.target }}/release/azad --version
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries-${{ matrix.target }}
+          path: archives/
 
   images:
     needs: build
@@ -150,7 +192,7 @@ jobs:
           IMAGE: ${{ steps.name.outputs.image }}
 
   release:
-    needs: [build, images]
+    needs: [build, macos, images]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:

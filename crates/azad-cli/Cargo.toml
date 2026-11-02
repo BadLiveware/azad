@@ -11,6 +11,14 @@ publish.workspace = true
 name = "azad"
 path = "src/main.rs"
 
+[[bin]]
+name = "azad-executor"
+path = "src/bin/azad-executor.rs"
+
+[[bin]]
+name = "azad-orchestrator"
+path = "src/bin/azad-orchestrator.rs"
+
 [lints]
 workspace = true
 

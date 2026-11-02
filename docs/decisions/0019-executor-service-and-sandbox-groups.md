@@ -78,3 +78,7 @@ Azad's executor must also run on a developer's machine, without root.
 ## Amendment, 2026-11-01
 
 Decision 0020 gives the action cache trust levels; the client of the executor service writes results at its own level.
+
+## Amendment, 2026-11-03
+
+Decision 0029 makes the service its own binary: `azad executor --socket <path>` is now `azad-executor --socket <path>`.

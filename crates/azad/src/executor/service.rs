@@ -40,7 +40,7 @@ impl ExecutorService {
                 let connection = connection?;
                 scope.spawn(move || {
                     if let Err(e) = self.serve_group(connection) {
-                        eprintln!("azad executor: a group ended with an error: {e}");
+                        eprintln!("azad-executor: a group ended with an error: {e}");
                     }
                 });
             }

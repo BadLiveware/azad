@@ -356,7 +356,7 @@ A goal of the package: it holds when each action in `require` succeeds.
 
 * `on`: (defaults to: `[]`)
 
-  The events on which the orchestrator (`azad serve`) runs the goal: `push`, `pull_request`, or both.
+  The events on which the orchestrator (`azad-orchestrator serve`) runs the goal: `push`, `pull_request`, or both.
 
   A push to the default branch runs at the trust level `main`; a pull request, and a push to another branch,
   at `pull-request`.

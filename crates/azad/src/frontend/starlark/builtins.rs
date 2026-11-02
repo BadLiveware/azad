@@ -799,7 +799,7 @@ pub(crate) fn azad_globals(builder: &mut GlobalsBuilder) {
     ///
     ///   An action runs after the actions whose outputs it reads.
     /// * `doc`: What the goal is for, for `azad list`.
-    /// * `on`: The events on which the orchestrator (`azad serve`) runs the goal: `push`, `pull_request`, or both.
+    /// * `on`: The events on which the orchestrator (`azad-orchestrator serve`) runs the goal: `push`, `pull_request`, or both.
     ///
     ///   A push to the default branch runs at the trust level `main`; a pull request, and a push to another branch,
     ///   at `pull-request`.

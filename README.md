@@ -50,17 +50,26 @@ The word itself is *āzād* (آزاد), "free" in Persian, Kurdish, Urdu and Hin
 
 ## Install
 
-Azad runs on Linux, on x86_64 and aarch64, and needs `bwrap` (bubblewrap) with unprivileged user namespaces for isolated runs.
+Azad runs on Linux, on x86_64 and aarch64, and on macOS.
+Isolated runs (`--isolated`) need Linux and `bwrap` (bubblewrap) with unprivileged user namespaces.
 On Ubuntu 24.04 and later, AppArmor blocks them; allow them with `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`.
+On macOS, `--local image` runs a task in its image through Docker or Podman instead.
 
-A release holds three static binaries, which must stay in one directory: `azad`, `azad-gha-runner`, which runs the steps of GHA workflows inside any image, and `azad-guest`, the init of the microVM sandbox.
+Each kind of user needs one binary (decision 0029):
+
+| Binary | Who needs it | Systems |
+|---|---|---|
+| `azad` | Everyone: the task runner, and the Azad action in GitHub Actions | Linux, macOS |
+| `azad-gha-runner` | Only to run GHA workflow files through Azad; put it next to `azad` | Linux |
+| `azad-executor` | Hosts that run CI; its archive holds `azad-guest`, the init of its microVMs | Linux |
+| `azad-orchestrator` | The service that takes GitHub's events and runs their goals | Linux |
 
 | From | How |
 |---|---|
-| A release | Download `azad-<arch>-unknown-linux-musl.tar.gz` from [Releases](https://github.com/BadLiveware/azad/releases), and unpack it into a directory on your `PATH` |
-| An image | `COPY --from=ghcr.io/badliveware/azad-bin:main / /usr/local/bin/` in a Dockerfile; the image holds only the binaries |
-| A container | `docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined -v "$PWD:/work" -v azad:/root/.cache ghcr.io/badliveware/azad:main run --isolated check`; the image has bubblewrap and git, the options let bubblewrap make its namespaces and mount `/proc`, and the volume keeps Azad's store |
-| The source | `cargo install --path crates/azad-cli`, and `cargo build --release -p azad-gha-runner -p azad-guest --target x86_64-unknown-linux-musl`; a build of `azad` in this repository finds the other two in `target/` |
+| A release | Download `<binary>-<target>.tar.gz` from [Releases](https://github.com/BadLiveware/azad/releases), such as `azad-aarch64-apple-darwin.tar.gz`, and unpack it into a directory on your `PATH` |
+| An image | `COPY --from=ghcr.io/badliveware/azad-bin:main /azad /usr/local/bin/` in a Dockerfile; the image holds only `azad` |
+| A container | `docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined --security-opt systempaths=unconfined -v "$PWD:/work" -v azad:/root/.cache ghcr.io/badliveware/azad:main run --isolated check`; the image has `azad`, bubblewrap and git, the options let bubblewrap make its namespaces and mount `/proc`, and the volume keeps Azad's store |
+| The source | `cargo install --path crates/azad-cli --bin azad`; for GHA workflow files also `cargo build --release -p azad-gha-runner --target x86_64-unknown-linux-musl`, which a build of `azad` in this repository finds in `target/` |
 
 The images have the tag `main` for the latest commit, `sha-<commit>` for each commit, and a version for each release.
 

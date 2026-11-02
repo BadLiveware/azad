@@ -1,6 +1,5 @@
 use std::fs;
 use std::io::{self, IsTerminal, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
@@ -11,7 +10,6 @@ use azad::frontend::{Listed, is_at_or_below, label, pattern};
 use azad::frontend::{Note, NoteLevel};
 use azad::ir::text;
 use azad::log::Stream;
-use azad::orchestrator;
 use azad::{Engine, EngineError, Event, Goal, Progress, RunReport, Severity, Status, host_platform};
 
 use crate::output::{self, Format, Summary, Verbosity};
@@ -421,93 +419,4 @@ fn report_load(event: &Event, verbosity: Verbosity) {
         Event::Note(note) => eprintln!("note: {}", note.text),
         Event::Progress(_) | Event::Remote(_) | Event::Timings(_) | Event::Loaded { .. } => {}
     }
-}
-
-/// Serves the executor on `socket`. A socket file that nothing listens on is left from an executor that stopped, and
-/// is replaced.
-pub(crate) fn serve_executor(config: &azad::EngineConfig, socket: &Path) -> Result<ExitCode> {
-    let service = Engine::executor_service(config)?;
-    if socket.exists() {
-        if UnixStream::connect(socket).is_ok() {
-            bail!("an executor listens on {} already", socket.display());
-        }
-        fs::remove_file(socket).with_context(|| format!("removing the old socket {}", socket.display()))?;
-    }
-    let listener = UnixListener::bind(socket).with_context(|| format!("listening on {}", socket.display()))?;
-    eprintln!("azad executor: listening on {}", socket.display());
-    service.serve(&listener).with_context(|| format!("serving on {}", socket.display()))?;
-    Ok(ExitCode::SUCCESS)
-}
-
-const WEBHOOK_SECRET_ENV: &str = "AZAD_WEBHOOK_SECRET";
-
-fn webhook_secret() -> Result<Vec<u8>> {
-    match std::env::var_os(WEBHOOK_SECRET_ENV).filter(|secret| !secret.is_empty()) {
-        Some(secret) => Ok(secret.into_encoded_bytes()),
-        None => bail!("set {WEBHOOK_SECRET_ENV} to the secret that signs webhook deliveries"),
-    }
-}
-
-pub(crate) fn serve(config: azad::EngineConfig, listen: &str) -> Result<ExitCode> {
-    let secret = webhook_secret()?;
-    let listener = std::net::TcpListener::bind(listen).with_context(|| format!("listening on {listen}"))?;
-    eprintln!("azad serve: webhooks to http://{}{}", listener.local_addr()?, orchestrator::WEBHOOK_PATH);
-    orchestrator::Orchestrator::new(config, &secret).serve(&listener)?;
-    Ok(ExitCode::SUCCESS)
-}
-
-fn simulator(config: &azad::EngineConfig, server: &str, default_branch: &str) -> Result<orchestrator::Simulator> {
-    Ok(orchestrator::Simulator::new(&config.root, server, &webhook_secret()?, default_branch)?)
-}
-
-/// The branch to send: the one named, or the one that is checked out.
-fn branch_or_current(config: &azad::EngineConfig, branch: Option<&str>) -> Result<String> {
-    if let Some(branch) = branch {
-        return Ok(branch.to_owned());
-    }
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&config.root)
-        .args(["symbolic-ref", "--short", "HEAD"])
-        .output()?;
-    if !output.status.success() {
-        bail!("no branch is checked out in {}; name one", config.root.display());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-}
-
-pub(crate) fn simulate_push(
-    config: &azad::EngineConfig,
-    server: &str,
-    default_branch: &str,
-    branch: Option<&str>,
-) -> Result<ExitCode> {
-    let branch = branch_or_current(config, branch)?;
-    let answer = simulator(config, server, default_branch)?.push(&branch)?;
-    eprintln!("azad: pushed {branch}: {answer}");
-    Ok(ExitCode::SUCCESS)
-}
-
-pub(crate) fn simulate_pull_request(
-    config: &azad::EngineConfig,
-    server: &str,
-    default_branch: &str,
-    number: u64,
-    branch: Option<&str>,
-) -> Result<ExitCode> {
-    let branch = branch_or_current(config, branch)?;
-    let answer = simulator(config, server, default_branch)?.pull_request(number, &branch)?;
-    eprintln!("azad: pull request {number} from {branch}: {answer}");
-    Ok(ExitCode::SUCCESS)
-}
-
-pub(crate) fn checks(config: &azad::EngineConfig) -> Result<ExitCode> {
-    let runs = orchestrator::fake_github(&config.store).check_runs()?;
-    if runs.is_empty() {
-        eprintln!("No check runs yet; `azad serve` writes them.");
-    }
-    for run in runs {
-        println!("{run}");
-    }
-    Ok(ExitCode::SUCCESS)
 }

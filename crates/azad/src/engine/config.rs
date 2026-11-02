@@ -196,16 +196,18 @@ fn musl_target() -> String {
     format!("{}-unknown-linux-musl", env::consts::ARCH)
 }
 
+const RELEASES_URL: &str = "https://github.com/BadLiveware/azad/releases";
+
 pub(crate) fn missing_tool_hint(name: &str) -> String {
     let target = musl_target();
     match name {
         GHA_RUNNER => format!(
-            "build it with `cargo build --release -p {GHA_RUNNER} --target {target}`, or set \
-             {GHA_RUNNER_ENV} to the path of a static build"
+            "put it next to this program from {GHA_RUNNER}-{target}.tar.gz of a release ({RELEASES_URL}), build it \
+             with `cargo build --release -p {GHA_RUNNER} --target {target}`, or set {GHA_RUNNER_ENV} to its path"
         ),
         GUEST => format!(
-            "build it with `cargo build --release -p {GUEST} --target {target}`, or set {GUEST_ENV} to \
-             the path of a static build"
+            "put it next to this program from azad-executor-{target}.tar.gz of a release ({RELEASES_URL}), build it \
+             with `cargo build --release -p {GUEST} --target {target}`, or set {GUEST_ENV} to its path"
         ),
         _ => format!("this version of Azad does not know where to find {name}"),
     }
