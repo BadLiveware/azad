@@ -18,7 +18,9 @@ struct Sandbox {
 impl Sandbox {
     fn new() -> Self {
         let root = TempDir::new().unwrap();
-        let base = root.path();
+        // macOS's temporary directory is behind a symlink (/var is /private/var), and a step's shell reports the
+        // resolved path; a sandbox's workspace has no symlink above it.
+        let base = &root.path().canonicalize().unwrap();
         let layout = Layout {
             plan_file: base.join("job/job.json"),
             work_dir: base.join("work"),

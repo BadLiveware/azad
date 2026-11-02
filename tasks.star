@@ -75,7 +75,7 @@ clippy = task(
 
 test = task(
     name = "test",
-    cmd = cargo_command("cargo test --workspace --locked --lib --bins " + " ".join(["--test " + name for name in SANDBOX_FREE_TESTS])),
+    cmd = cargo_command("cargo test --workspace --locked --no-fail-fast --lib --bins " + " ".join(["--test " + name for name in SANDBOX_FREE_TESTS])),
     # The reference test compares the built-ins with their page, and the YAML test the parser with its schema.
     sources = SOURCES + ["docs/starlark.md", "docs/tasks.schema.json"],
     image = RUST,
