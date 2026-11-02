@@ -13,6 +13,17 @@ The same `tasks.star` runs in two places (decision 0015).
 On your machine, a task runs with your tools, in your working tree, as with Make or Taskfile; the tools stay fast in the way they always are.
 In CI (`--isolated`), the same task runs in its image, in a sandbox that holds only the files it names, and its result is shared through a remote cache.
 
+## Where Azad sits
+
+Azad is between the tools that run commands and the build systems that own the whole build.
+
+- **Make, Just and Task** run your commands, but know little about what they read, so CI runs everything again on each new runner.
+- **Bazel** knows every input and shares every result, but you must describe the whole build in its rules first.
+- **Azad** runs your own commands and tools, as the first group does, and gives them what Bazel gives its actions: declared inputs, a sandbox, content addresses, and a shared cache.
+  It is also a CI system.
+
+[`docs/comparison.md`](docs/comparison.md) compares them side by side, and says where Azad is weaker.
+
 ## The name
 
 Azad (pronounced *ah-ZAHD*) comes from two places.
