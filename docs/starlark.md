@@ -937,6 +937,16 @@ The ID of the commit, as 40 hexadecimal digits.
 
 ---
 
+## commit.message
+
+```python
+commit.message: str
+```
+
+The commit message: the subject line, then the body after a blank line, without the line ends at the end.
+
+---
+
 ## commit.parents
 
 ```python

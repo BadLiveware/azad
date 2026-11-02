@@ -26,3 +26,49 @@ def latest_release(prefix = "v"):
     if not releases:
         return (None, None)
     return sorted(releases)[-1]
+
+_BREAKING_FOOTERS = ["BREAKING CHANGE:", "BREAKING-CHANGE:"]
+
+def conventional_commit(message):
+    """The Conventional Commits header of `message`, as `(type, breaking)`; `(None, False)` when it has none.
+
+    The header is the subject line, `<type>[(<scope>)][!]: <description>`, such as `feat(cli)!: drop --sandbox`. A
+    change is breaking when its header has `!`, or a line of its body starts with `BREAKING CHANGE:`."""
+    lines = message.split("\n")
+    prefix, colon, description = lines[0].partition(": ")
+    kind = prefix.removesuffix("!").partition("(")[0]
+    if not colon or not description.strip() or not kind or not kind.isalpha() or not kind.islower():
+        return (None, False)
+    breaking = prefix.endswith("!") or len([line for line in lines[1:] if line.startswith(tuple(_BREAKING_FOOTERS))]) > 0
+    return (kind, breaking)
+
+def next_release(prefix = "v", commit = None, releasing = ["feat", "fix", "perf"], window = 1000):
+    """The release that `commit` (the `HEAD` commit when it is None) makes, as `<major>.<yyyymmdd>.<n>`; None when no
+    commit since the latest release is one.
+
+    The version is semantic: `major` counts breaking changes, `yyyymmdd` is the UTC date of the commit, and `n` counts
+    the releases of that major on that day, from 0. A commit since the latest release (`latest_release(prefix)`) makes
+    a release when its Conventional Commits type is in `releasing`, or when it is breaking; a breaking one raises
+    `major`. The commits since the latest release are the first parents of `commit` down to the release's commit, at
+    most `window` of them, as a branch with squash merges or direct pushes has them."""
+    commit = commit or git.commit()
+    latest, tag = latest_release(prefix)
+    since = commit.first_parents(window)
+    if latest:
+        released = git.tags(tag)[tag]
+        ids = [parent.id for parent in since]
+        if released not in ids:
+            fail("next_release(): %s is not among the %d first parents of %s" % (tag, window, commit.id))
+        since = since[:ids.index(released)]
+    headers = [conventional_commit(parent.message) for parent in since]
+    breaking = len([kind for kind, is_breaking in headers if is_breaking]) > 0
+    if not breaking and len([kind for kind, _ in headers if kind in releasing]) == 0:
+        return None
+    major = 0
+    if latest:
+        major = latest.major
+    if latest and breaking:
+        major += 1
+    day = commit.date.replace("-", "")
+    same_day = [name for name in git.tags("%s%d.%s.*" % (prefix, major, day)) if semver.valid(name[len(prefix):])]
+    return semver.parse("%d.%s.%d" % (major, day, len(same_day)))

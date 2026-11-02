@@ -101,3 +101,7 @@ Consequences:
 - `crates/azad/tests/versions.rs` checks the source against a server that answers as GitHub's API does, from the full repository: GitHub cannot be reached from a test.
   It checks the version, the notes, and that a wrong token fails.
 - Facts from the other source are not in the remote cache yet; each machine asks again.
+
+## Amendment, 2026-11-03
+
+A commit has its `message` (`commit.message`), from the local repository and from GitHub's API, and `@std//version.star` has `conventional_commit()` and `next_release()`, which decision 0030 uses for Azad's own releases.

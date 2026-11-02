@@ -46,7 +46,7 @@ fn values(dir: &Path, expressions: &[(&str, &str)]) -> (Vec<(String, String)>, P
 fn values_in(context: &Context, dir: &Path, expressions: &[(&str, &str)]) -> (Vec<(String, String)>, Package) {
     let env: Vec<String> = expressions.iter().map(|(name, value)| format!("{name:?}: str({value})")).collect();
     let tasks = format!(
-        "load(\"@std//version.star\", \"commit_calver\", \"latest_release\")\n\
+        "load(\"@std//version.star\", \"commit_calver\", \"conventional_commit\", \"latest_release\", \"next_release\")\n\
          action(name = \"values\", cmd = [\"true\"], root = image({BASE:?}), env = {{{}}})\n",
         env.join(", ")
     );
@@ -62,7 +62,7 @@ fn value(dir: &Path, expression: &str) -> String {
 
 fn error(dir: &Path, expression: &str) -> String {
     let tasks = format!(
-        "load(\"@std//version.star\", \"commit_calver\")\n\
+        "load(\"@std//version.star\", \"commit_calver\", \"next_release\")\n\
          action(name = \"values\", cmd = [\"true\"], root = image({BASE:?}), env = {{\"v\": str({expression})}})\n"
     );
     fs::write(dir.join("tasks.star"), tasks).unwrap();
@@ -226,7 +226,9 @@ fn answer(full: &Path, request: &Value) -> Value {
         let mut fields = line.split(' ');
         let (id, date) = (fields.next().unwrap(), fields.next().unwrap());
         let parents: Vec<Value> = fields.map(|parent| json!({ "oid": parent })).collect();
-        let mut commit = json!({ "oid": id, "committedDate": date, "parentIds": { "nodes": parents } });
+        let message = git(full, &["log", "-1", "--format=%B", id], "");
+        let mut commit =
+            json!({ "oid": id, "committedDate": date, "message": message, "parentIds": { "nodes": parents } });
         if let Some(next) = chain.take() {
             commit["next"] = json!({ "nodes": [next] });
         }
@@ -266,4 +268,39 @@ fn a_shallow_clone_takes_the_history_it_lacks_from_github_and_says_so() {
     fs::write(shallow.join("tasks.star"), "x = git.commit().first_parents(3)\n").unwrap();
     let refused = evaluate_in(&context, shallow, "", PLATFORM).unwrap_err().to_string();
     assert!(refused.contains("401"), "{refused}");
+}
+
+/// `<major>.<yyyymmdd>.<n>` from Conventional Commits: a release only when a commit since the last one is a feature, a
+/// fix or breaking; `n` counts the releases of a day; a breaking change raises `major`.
+#[test]
+fn the_next_release_follows_the_conventional_commits_since_the_latest_one() {
+    let repo = repository();
+    let dir = repo.path();
+    let tag = |name: &str| git(dir, &["tag", name], "");
+    commit(dir, "chore: start", "2026-11-01T08:00:00Z");
+    commit(dir, "Not a conventional commit", "2026-11-01T08:30:00Z");
+    assert_eq!(value(dir, "next_release()"), "None", "no feature, no fix, nothing breaking");
+    commit(dir, "feat(cli): a command", "2026-11-01T09:00:00Z");
+    assert_eq!(value(dir, "next_release()"), "0.20261101.0", "the first release");
+    tag("v0.20261101.0");
+    assert_eq!(value(dir, "next_release()"), "None", "nothing since the release");
+    commit(dir, "docs: words", "2026-11-01T10:00:00Z");
+    assert_eq!(value(dir, "next_release()"), "None");
+    commit(dir, "fix: a bug", "2026-11-01T11:00:00Z");
+    assert_eq!(value(dir, "next_release()"), "0.20261101.1", "the second release of the day");
+    tag("v0.20261101.1");
+    commit(dir, "fix: another", "2026-11-02T09:00:00Z");
+    assert_eq!(value(dir, "next_release()"), "0.20261102.0", "a new day starts at 0");
+    commit(dir, "refactor: the store\n\nBREAKING CHANGE: the old layout is gone", "2026-11-02T10:00:00Z");
+    assert_eq!(value(dir, "next_release()"), "1.20261102.0", "a breaking footer raises the major");
+    tag("v1.20261102.0");
+    commit(dir, "feat!: a new language", "2026-11-02T11:00:00Z");
+    assert_eq!(value(dir, "next_release()"), "2.20261102.0", "so does a header with !");
+    assert_eq!(value(dir, "conventional_commit(\"feat(cli)!: x\")"), "(\"feat\", True)");
+    assert_eq!(value(dir, "conventional_commit(\"Feat: x\")"), "(None, False)");
+    assert_eq!(value(dir, "conventional_commit(\"fix:\")"), "(None, False)");
+
+    git(dir, &["checkout", "--quiet", "--orphan", "other"], "");
+    commit(dir, "feat: elsewhere", "2026-11-03T09:00:00Z");
+    assert!(error(dir, "next_release()").contains("v1.20261102.0 is not among the 1000 first parents"));
 }

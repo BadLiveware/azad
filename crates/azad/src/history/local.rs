@@ -119,5 +119,6 @@ fn facts(repo: &gix::Repository, id: ObjectId) -> Result<CommitFacts, HistoryErr
         id: id.to_string(),
         time: time.seconds,
         parents: commit.parent_ids().map(|parent| parent.to_string()).collect(),
+        message: String::from_utf8_lossy(commit.message_raw_sloppy()).trim_end().to_owned(),
     })
 }

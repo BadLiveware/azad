@@ -36,6 +36,7 @@ pub(crate) struct CommitValue {
     id: String,
     time: i64,
     parents: Vec<String>,
+    message: String,
 }
 
 starlark_simple_value!(CommitValue);
@@ -55,7 +56,7 @@ impl<'v> StarlarkValue<'v> for CommitValue {
 
 impl From<CommitFacts> for CommitValue {
     fn from(facts: CommitFacts) -> Self {
-        CommitValue { id: facts.id, time: facts.time, parents: facts.parents }
+        CommitValue { id: facts.id, time: facts.time, parents: facts.parents, message: facts.message }
     }
 }
 
@@ -145,6 +146,12 @@ fn commit_methods(builder: &mut MethodsBuilder) {
     #[starlark(attribute)]
     fn parents(this: &CommitValue) -> anyhow::Result<Vec<String>> {
         Ok(this.parents.clone())
+    }
+
+    /// The commit message: the subject line, then the body after a blank line, without the line ends at the end.
+    #[starlark(attribute)]
+    fn message(this: &CommitValue) -> anyhow::Result<String> {
+        Ok(this.message.clone())
     }
 
     /// How many commits this commit contains: itself and all of its ancestors, through every parent of a merge.

@@ -23,6 +23,8 @@ pub struct CommitFacts {
     pub time: i64,
     /// The IDs of the parents, the first parent first.
     pub parents: Vec<String>,
+    /// The commit message: its subject line, and its body after a blank line.
+    pub message: String,
 }
 
 #[derive(Debug, thiserror::Error)]

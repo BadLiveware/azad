@@ -27,7 +27,8 @@ pub struct GitHubHistory {
 
 /// The query of `commits` commits of the first-parent chain of `$oid`, nested, with each commit's parents.
 fn chain_query(commits: usize) -> String {
-    let fields = format!("oid committedDate parentIds: parents(first: {PARENTS_PER_COMMIT}) {{ nodes {{ oid }} }}");
+    let fields =
+        format!("oid committedDate message parentIds: parents(first: {PARENTS_PER_COMMIT}) {{ nodes {{ oid }} }}");
     let mut chain = fields.clone();
     for _ in 1..commits {
         chain = format!("{fields} next: parents(first: 1) {{ nodes {{ {chain} }} }}");
@@ -123,7 +124,7 @@ fn facts(commit: &Value) -> Result<CommitFacts, HistoryError> {
         .and_then(Value::as_array)
         .map(|nodes| nodes.iter().filter_map(|node| node.get("oid")?.as_str().map(str::to_owned)).collect())
         .unwrap_or_default();
-    Ok(CommitFacts { id: field("oid")?.to_owned(), time, parents })
+    Ok(CommitFacts { id: field("oid")?.to_owned(), time, parents, message: field("message")?.trim_end().to_owned() })
 }
 
 impl History for GitHubHistory {
