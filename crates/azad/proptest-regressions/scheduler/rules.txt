@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 72c1a231fa14d4a628f916dd73a7a60e5a8785a988832e751b3885da136af0d8 # shrinks to facts = Facts { requested: {}, depends_on: {(1, 0)}, succeeded: {}, failed: {}, started: {} }

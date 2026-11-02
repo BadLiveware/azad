@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/BadLiveware/azad/blob/main/docs/tasks.schema.json",
+  "title": "Azad tasks.yaml",
+  "description": "A package of Azad declared as data (decision 0027). It means what the same tasks.star means.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "package": {
+      "description": "What the package says of itself for the packages that depend on it (decision 0028).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deps": { "description": "The package's immediate dependencies: packages, such as //libs/core, or sets of files and tasks, such as //libs/core:contracts.", "$ref": "#/$defs/strings" },
+        "exports": { "description": "Patterns of the files that the package gives its dependents; by default all that git tracks.", "$ref": "#/$defs/strings" },
+        "provides": { "description": "Tasks of the package, by name, whose outputs its dependents get.", "$ref": "#/$defs/strings" }
+      }
+    },
+    "file_sets": {
+      "description": "Named sets of the package's files, which other packages can depend on, by name.",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/file_set" }
+    },
+    "uses": {
+      "description": "Calls of modules that return parts, such as the standard tasks of a kind of project.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/use" }
+    },
+    "tasks": {
+      "description": "The package's own tasks, by name.",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/task" }
+    },
+    "goals": {
+      "description": "Goals beyond the roles' goals, by name.",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/goal" }
+    }
+  },
+  "$defs": {
+    "strings": { "type": "array", "items": { "type": "string" } },
+    "stringMap": { "type": "object", "additionalProperties": { "type": "string" } },
+    "config": {
+      "description": "A value of config.star, such as an image that it pins.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["config"],
+      "properties": { "config": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" } }
+    },
+    "file_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sources"],
+      "properties": {
+        "sources": { "description": "Patterns of its files, relative to the package.", "$ref": "#/$defs/strings" },
+        "exclude": { "description": "Patterns of files to leave out.", "$ref": "#/$defs/strings" },
+        "deps": { "description": "The dependencies that come with the set.", "$ref": "#/$defs/strings" }
+      }
+    },
+    "use": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module"],
+      "properties": {
+        "module": {
+          "description": "A module that returns parts: <file>:<name>, such as //tools/azad/dotnet.star:standard.",
+          "type": "string",
+          "pattern": "^(//|@std//).+\\.star:[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "with": {
+          "description": "The arguments of the call, by parameter.",
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              { "type": ["string", "integer", "boolean"] },
+              { "type": "array", "items": { "type": ["string", "integer", "boolean"] } },
+              { "$ref": "#/$defs/config" }
+            ]
+          }
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cmd"],
+      "properties": {
+        "cmd": {
+          "description": "One line that the shell runs, or a list of words: the program and its arguments.",
+          "anyOf": [{ "type": "string" }, { "$ref": "#/$defs/strings" }]
+        },
+        "sources": { "description": "Patterns of the files that the task reads; after //, of the workspace.", "$ref": "#/$defs/strings" },
+        "exclude": { "description": "Patterns of files to leave out of sources.", "$ref": "#/$defs/strings" },
+        "generates": { "description": "Directories that the task writes, for the tasks after it.", "$ref": "#/$defs/strings" },
+        "deps": { "description": "Tasks that must succeed first: names of this package, or labels such as //libs/logging:build.", "$ref": "#/$defs/strings" },
+        "image": {
+          "description": "The image of an isolated run: a reference with its digest, or a value of config.star.",
+          "anyOf": [{ "type": "string" }, { "$ref": "#/$defs/config" }]
+        },
+        "env": { "description": "Variables of the command. Put numbers in quotes.", "$ref": "#/$defs/stringMap" },
+        "caches": { "description": "State that the task's tools keep between runs, by path, and the name of each.", "$ref": "#/$defs/stringMap" },
+        "network": { "description": "Whether an isolated run has network access.", "type": "boolean" },
+        "tags": { "description": "Names that --include and --exclude select by.", "$ref": "#/$defs/strings" },
+        "local": { "description": "Where a local run runs the task.", "enum": ["host", "image"] },
+        "secrets": { "description": "Variables of azad's environment that the command gets in its image.", "$ref": "#/$defs/strings" },
+        "doc": { "description": "What the task is for.", "type": "string" },
+        "role": { "description": "The role whose goal holds the task, such as test or fmt-check.", "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "ci": { "description": "Whether the goal ci holds the task; it needs a role.", "type": "boolean" },
+        "dependencies": {
+          "description": "The dependencies that the task reads, with theirs: true for those of the package, or a list of them.",
+          "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/strings" }]
+        }
+      }
+    },
+    "goal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["require"],
+      "properties": {
+        "require": { "description": "Tasks that must succeed: names of this package's tasks, or their labels.", "$ref": "#/$defs/strings" },
+        "doc": { "description": "What the goal is for.", "type": "string" },
+        "on": { "description": "The events on which the orchestrator runs the goal.", "type": "array", "items": { "enum": ["push", "pull_request"] } }
+      }
+    }
+  }
+}

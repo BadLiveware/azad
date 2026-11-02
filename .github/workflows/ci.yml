@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # Azad checks Azad: `//:check` and the task `examples` are the only checks of a change, in two jobs at the
+  # same time. Tasks with an image run isolated in it, with their results and cache volumes in the GitHub Actions
+  # cache; the sandbox tests and the examples run on the runner, which starts from a copy of their target/. The `build`
+  # job makes the azad that runs them.
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # A release build: Azad hashes every file that it stores, and a debug build hashes about six times slower.
+      - run: cargo build --release -p azad-cli --locked
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: azad
+          path: target/release/azad
+          retention-days: 1
+
+  self-build:
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        goal: [check, examples]
+    # The tasks that run on the runner keep target/ small, as the tasks in the image do (see tasks.star).
+    env:
+      AZAD_DROP_OWN_BUILD: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: azad
+          path: ${{ runner.temp }}/azad
+      - run: chmod +x "$RUNNER_TEMP/azad/azad"
+      # The tasks that run on the runner use its Rust toolchain, as rust-toolchain.toml pins it.
+      - run: rustup show active-toolchain || rustup toolchain install
+      # The images need more disk than the runner has free. Removing preinstalled toolchains that Azad does not use
+      # takes over a minute, so it runs while Azad starts; it frees space before the images need it.
+      - run: nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost > /dev/null 2>&1 &
+      - uses: ./
+        with:
+          goal: //:${{ matrix.goal }}
+          binary: ${{ runner.temp }}/azad/azad
+          signing-key: ${{ secrets.AZAD_SIGNING_KEY }}
+      # A warm machine, as a CI node that keeps its store: the same runner checks made-up one-line changes. The first
+      # run gets the image and the volumes, which the check above may not have needed; the second is the measurement.
+      # These runs do not write to the cache, so nothing of the made-up changes is stored.
+      - if: matrix.goal == 'check'
+        run: |
+          echo 'pub const WARM_RUN: u32 = 1;' >> crates/azad/src/lib.rs
+      - if: matrix.goal == 'check'
+        uses: ./
+        with:
+          goal: //:check
+          binary: ${{ runner.temp }}/azad/azad
+      - if: matrix.goal == 'check'
+        run: |
+          sed -i 's/WARM_RUN: u32 = 1/WARM_RUN: u32 = 2/' crates/azad/src/lib.rs
+      - if: matrix.goal == 'check'
+        name: Check a one-line change on a warm machine
+        uses: ./
+        with:
+          goal: //:check
+          binary: ${{ runner.temp }}/azad/azad
+
+  # A new runner with an empty store gets the results of the isolated tasks from the cache: nothing is pulled or built.
+  # (The tasks that run on the runner are never shared, so the whole goal would run them again.)
+  self-build-again:
+    needs: self-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: azad
+          path: ${{ runner.temp }}/azad
+      - run: chmod +x "$RUNNER_TEMP/azad/azad"
+      - uses: ./
+        id: azad
+        with:
+          goal: //:test
+          binary: ${{ runner.temp }}/azad/azad
+      - run: test "${{ steps.azad.outputs.ran }}" = 0 && test "${{ steps.azad.outputs.holds }}" = true
+
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1

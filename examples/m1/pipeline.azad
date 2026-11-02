@@ -1,0 +1,37 @@
+# Milestone M1: a graph of actions, written by hand in the text form of the Action IR.
+# `rootfs` comes from dev/host-rootfs.sh; see README.md.
+
+action sort
+  platform linux/amd64
+  root local("rootfs")
+  env PATH "/usr/bin"
+  command "sh" "-c" "mkdir out && sort /src/words.txt > out/sorted"
+  input /src local("src")
+  output out
+
+action count
+  platform linux/amd64
+  root local("rootfs")
+  env PATH "/usr/bin"
+  command "sh" "-c" "mkdir out && wc -l < /sorted/sorted > out/count"
+  input /sorted output(sort, "out")
+  output out
+
+action unique
+  platform linux/amd64
+  root local("rootfs")
+  env PATH "/usr/bin"
+  command "sh" "-c" "mkdir out && uniq /sorted/sorted > out/unique"
+  input /sorted output(sort, "out")
+  output out
+
+action report
+  platform linux/amd64
+  root local("rootfs")
+  env PATH "/usr/bin"
+  command "sh" "-c" "mkdir out && { echo words: $(cat /count/count); echo unique:; cat /unique/unique; } | tee out/report"
+  input /count output(count, "out")
+  input /unique output(unique, "out")
+  output out
+
+goal check report

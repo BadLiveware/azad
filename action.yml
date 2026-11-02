@@ -1,0 +1,54 @@
+name: Azad
+description: Run an Azad goal, with the GitHub Actions cache as its remote cache.
+inputs:
+  goal:
+    description: The goal to run, such as //:check or .github/workflows/ci.yml.
+    required: true
+  binary:
+    description: The path of the azad program. There are no released builds yet, so a workflow builds it.
+    required: true
+  signing-key:
+    description: The key that signs cache entries, from `azad key generate`, such as a secret. Without it, the cache is read-only.
+    required: false
+    default: ""
+  cache:
+    description: The remote cache, as `azad --cache` takes it.
+    required: false
+    default: gha
+  jobs:
+    description: How many actions may run at the same time.
+    required: false
+    default: "4"
+  github-token:
+    description: A token that reads the repository, for the history that a shallow checkout lacks, such as the commit count (decision 0021). Empty turns it off.
+    required: false
+    default: ${{ github.token }}
+  verbosity:
+    description: "What Azad shows beyond results and errors, as `azad --verbosity` takes it: minimal, normal or diagnostic."
+    required: false
+    default: normal
+  include:
+    description: Tags, separated by commas; only the tasks with one of them run, of those that the goal selects (decision 0023).
+    required: false
+    default: ""
+  exclude:
+    description: Tags, separated by commas; the tasks with one of them do not run, of those that the goal selects.
+    required: false
+    default: ""
+outputs:
+  holds:
+    description: Whether the goal holds, "true" or "false".
+  needed:
+    description: How many actions the goal needed.
+  ran:
+    description: How many actions ran.
+  cached:
+    description: How many results were known, here or in the cache.
+  failed:
+    description: How many actions failed.
+  skipped:
+    description: How many actions were skipped because a dependency failed.
+runs:
+  # A JavaScript action, because GitHub gives the cache service's address and token only to JavaScript actions.
+  using: node24
+  main: action/index.js

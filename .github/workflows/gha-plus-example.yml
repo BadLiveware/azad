@@ -1,0 +1,38 @@
+# GHA+ (decision 0013): GitHub runs this workflow natively, and dev/check-examples.sh runs the same file with Azad.
+# The AZAD_* variables are hints that GitHub passes on and Azad reads: a hinted step runs as its own action with only
+# the files that it names, so Azad skips it when those files did not change.
+name: GHA+ example
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: examples/m2-go/go.mod
+          cache: false
+      - name: Test
+        working-directory: examples/m2-go
+        run: go test ./...
+        env:
+          # fetch: the step downloads Go modules, so it needs the network; it is still cached by its inputs.
+          AZAD_KIND: fetch
+          AZAD_INPUTS: examples/m2-go/**
+      - name: Build
+        working-directory: examples/m2-go
+        run: go build -trimpath -buildvcs=false -o "$GITHUB_WORKSPACE/out/words" .
+        env:
+          AZAD_KIND: fetch
+          AZAD_INPUTS: examples/m2-go/**
+          AZAD_OUTPUTS: out/words
+      - name: Use
+        run: |
+          echo "azad culture azad" | out/words | sed 's/^/words: /'

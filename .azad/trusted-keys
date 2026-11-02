@@ -1,0 +1,3 @@
+# Keys whose remote cache entries Azad believes (decision 0012): one public key per line, from `azad key generate`.
+# azad-ci-1 signs in GitHub Actions; its signing key is the repository secret AZAD_SIGNING_KEY.
+azad-ci-1:R3XsDfxxPW5fLRtGI3LLGX7gRh7ppQmfEflyTB+v+nw=

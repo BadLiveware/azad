@@ -1,0 +1,54 @@
+# Milestone M3: GitHub runs this workflow natively, and dev/check-examples.sh runs the same file with Azad.
+name: M3 example
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      go-version: ${{ steps.version.outputs.go }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: examples/m2-go/go.mod
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-${{ hashFiles('examples/m2-go/go.sum') }}
+      - id: version
+        run: echo "go=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+      - name: Test
+        working-directory: examples/m2-go
+        run: go test ./...
+      - name: Build
+        working-directory: examples/m2-go
+        run: go build -o "$GITHUB_WORKSPACE/out/words" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: words
+          path: out/
+
+  use:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        input: ["azad culture azad", "contact gridfire contact"]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: words
+          path: bin
+      - name: Run the program
+        run: |
+          chmod +x bin/words
+          echo "${{ matrix.input }}" | bin/words
+          echo "built with ${{ needs.build.outputs.go-version }}"

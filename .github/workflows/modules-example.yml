@@ -1,0 +1,23 @@
+# Milestone M6: GitHub runs this workflow natively with the composite action in std/test-split, and
+# dev/check-examples.sh runs the same file with Azad, which calls the module std/test.split (decision 0014).
+name: Modules example
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: unit
+        uses: BadLiveware/azad/std/test-split@main
+        with:
+          files: examples/m6-modules/tests/*.sh
+          command: sh {file}
+          inputs: examples/m6-modules/lib/**
+      - run: echo "the tests passed"

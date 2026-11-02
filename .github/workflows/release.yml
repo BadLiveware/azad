@@ -1,0 +1,167 @@
+name: Release
+
+# Builds Azad's static binaries and its two images (see the Dockerfile) for x86_64 and aarch64, each on a runner of its
+# own architecture, so no Rust code builds under emulation.
+#
+# - A pull request builds everything and publishes nothing.
+# - A push to main publishes the images as `main` and `sha-<commit>`, and keeps the binaries as artifacts of the run.
+# - A tag `v<version>` publishes the images as `<version>`, `<major>.<minor>` and `latest`, and makes a GitHub release
+#   with the binaries.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # GHCR needs lowercase names.
+  RUN_IMAGE: ghcr.io/badliveware/azad
+  BIN_IMAGE: ghcr.io/badliveware/azad-bin
+  PUBLISH: ${{ github.event_name != 'pull_request' }}
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, platform: linux/amd64, runner: ubuntu-24.04 }
+          - { arch: aarch64, platform: linux/arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - if: env.PUBLISH == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Binaries
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: bin
+          platforms: ${{ matrix.platform }}
+          outputs: type=local,dest=dist
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+      - name: Archive
+        run: |
+          archive="azad-${{ matrix.arch }}-unknown-linux-musl.tar.gz"
+          tar -C dist -czf "$archive" azad azad-gha-runner azad-guest
+          sha256sum "$archive" > "$archive.sha256"
+          dist/azad --version
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries-${{ matrix.arch }}
+          path: azad-${{ matrix.arch }}-unknown-linux-musl.tar.gz*
+
+      # The images go to the registry by digest only; the job `images` gives the two architectures one tag.
+      - name: Image with the binaries
+        id: bin
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: bin
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.BIN_IMAGE }},push-by-digest=true,name-canonical=true,push=${{ env.PUBLISH }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+      - name: Image to run Azad in
+        id: run
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: azad
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.RUN_IMAGE }},push-by-digest=true,name-canonical=true,push=${{ env.PUBLISH }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }}-run,mode=max
+      - name: Digests
+        run: |
+          mkdir -p digests/bin digests/run
+          touch "digests/bin/${BIN_DIGEST#sha256:}" "digests/run/${RUN_DIGEST#sha256:}"
+          echo "$BIN_IMAGE" > digests/bin/.image
+          echo "$RUN_IMAGE" > digests/run/.image
+        env:
+          BIN_DIGEST: ${{ steps.bin.outputs.digest }}
+          RUN_DIGEST: ${{ steps.run.outputs.digest }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.arch }}
+          path: digests
+          include-hidden-files: true
+          retention-days: 1
+
+  images:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image: [bin, run]
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digests-*
+          path: digests
+          merge-multiple: true
+      - id: name
+        run: echo "image=$(cat digests/${{ matrix.image }}/.image)" >> "$GITHUB_OUTPUT"
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ steps.name.outputs.image }}
+          tags: |
+            type=ref,event=branch
+            type=sha
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: One tag for both architectures
+        working-directory: digests/${{ matrix.image }}
+        run: |
+          tags=$(jq -cr '.tags | map("--tag " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          # shellcheck disable=SC2046,SC2086
+          docker buildx imagetools create $tags $(printf "$IMAGE@sha256:%s " *)
+          docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+
+  release:
+    needs: [build, images]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: binaries-*
+          path: dist
+          merge-multiple: true
+      - name: GitHub release
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}
