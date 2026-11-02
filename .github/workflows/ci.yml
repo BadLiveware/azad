@@ -149,21 +149,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
 
-  # The task runner on macOS. Isolated runs and the microVM sandbox need Linux, so Azad runs its own `test` task with
-  # the runner's tools, as a developer on a Mac would: the unit tests and the tests that need no sandbox. A second run
-  # must run nothing.
+  # The task runner on macOS, with the azad that a release ships. Isolated runs and the microVM sandbox need Linux, so
+  # it runs Azad's own `test` task with the runner's tools, as a developer on a Mac would: the unit tests and the tests
+  # that need no sandbox. A second run must run nothing.
   macos:
+    needs: build-macos
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries-aarch64-apple-darwin
+          path: ${{ runner.temp }}/release
+      - run: tar -C "$RUNNER_TEMP/release" -xzf "$RUNNER_TEMP/release/azad-aarch64-apple-darwin.tar.gz"
       - run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: cargo build --release -p azad-cli --locked
       - name: Run the task test with the runner's tools
-        run: target/release/azad run --output plain test
+        run: '"$RUNNER_TEMP/release/azad" run --output plain test'
       - name: Run it again, which runs nothing
         run: |
-          target/release/azad run --output plain --report "$RUNNER_TEMP/again.json" test
+          "$RUNNER_TEMP/release/azad" run --output plain --report "$RUNNER_TEMP/again.json" test
           jq -e '.holds == true and .ran == 0' "$RUNNER_TEMP/again.json"
 
   # The release that this commit makes, which stage 0 computes from the whole history and the tags: empty when no
