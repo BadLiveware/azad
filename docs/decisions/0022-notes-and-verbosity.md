@@ -34,3 +34,8 @@ It does not show decisions that evaluation makes while it loads a goal.
 - The sources of git facts are the first notes; other decisions can become notes in the same way, such as a goal that runs no action because every result is known.
 - Notes are not kept in run records, so `azad why` does not show them.
 - The renderers' test runs each verbosity through the plain and the GitHub renderer.
+
+## Amendment, 2026-11-03: `print()`
+
+A `.star` file can call Starlark's `print()`, such as to see a value while it writes a module.
+What it prints is a normal note that names the file that was evaluated: `//tools/show.star printed: ...`.

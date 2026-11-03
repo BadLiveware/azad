@@ -162,6 +162,12 @@ fn errors_are_clear() {
             "lock files",
         ),
         ("app/tasks.star", "load(\"//app/tasks.star\", \"x\")\n", "load cycle"),
+        ("app/tasks.star", "load(\"//tools/nope.star\", \"x\")\n", "error: //tools/nope.star does not exist\n"),
+        (
+            "app/tasks.star",
+            "package(deps = [\"//services/order\"])\n",
+            "//services/order is not a package: it has no tasks.star or tasks.yaml; did you mean //services/orders?",
+        ),
     ];
     for (path, content, expected) in cases {
         let message = error_of(&[(path, content)]);
@@ -239,4 +245,14 @@ fn a_file_that_ends_inside_brackets_names_the_open_bracket() {
         error_of(&[("app/tasks.star", "x = [\"(\"]  # (\na = action(\n    name = \"a\",\n    cmd = [\"true\"],\n\n")]);
     assert!(message.contains("the file ends before the '(' on line 2 is closed"), "{message}");
     assert!(message.contains("//app/tasks.star:2:11"), "{message}");
+}
+
+#[test]
+fn print_gives_a_note_that_names_the_file_that_printed() {
+    let dir = workspace();
+    write(dir.path(), "tools/show.star", "print(\"loaded\", 1)\ndef show(value):\n    print(value)\n");
+    write(dir.path(), "app/tasks.star", "load(\"//tools/show.star\", \"show\")\nshow([\"//lib\"])\n");
+    let package = evaluate(dir.path(), "app", PLATFORM).unwrap();
+    let printed: Vec<&str> = package.notes.iter().map(|note| note.text.as_str()).collect();
+    assert_eq!(printed, ["//tools/show.star printed: loaded 1", "//app/tasks.star printed: [\"//lib\"]"]);
 }

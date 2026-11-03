@@ -35,3 +35,11 @@ A team also wants to choose how much to declare: a coarse graph where builds are
 - A missing edge makes an isolated run fail where the files are missing, not a stale cache hit.
 - Azad could later check the declarations by tracing what a task opens in its sandbox, without knowing any language; the declarations stay the source of the cache key, because it must be known before the task runs.
 - The dependency files of a package are listed with `git ls-files`, so a workspace must be a git repository, as it already must for listing packages.
+
+## Amendment, 2026-11-03: a dependency names a package that exists
+
+A dependency on a package that does not exist failed only when a task read the dependencies, with a message that did not say which package declared it.
+
+- `package(deps = ...)`, `file_set(deps = ...)` and `task(dependencies = [...])` fail when the package of a dependency has no `tasks.star` or `tasks.yaml`.
+  The error points at the call, and names the nearest package by name when one is near enough to be a typo.
+- `azad check` reports what `azad run` would refuse in the dependency graph, such as a cycle, as unsupported.

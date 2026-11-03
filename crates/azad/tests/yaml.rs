@@ -120,6 +120,8 @@ fn evaluated(file: &str, content: &str) -> Result<Package, String> {
     let dir = TempDir::new().unwrap();
     write(dir.path(), "config.star", CONFIG);
     write(dir.path(), "lib/tools.star", MODULE);
+    write(dir.path(), "lib/tasks.star", "");
+    write(dir.path(), "shared/tasks.star", "");
     write(dir.path(), &format!("app/{file}"), content);
     evaluate(dir.path(), "app", PLATFORM).map_err(|error| error.to_string())
 }

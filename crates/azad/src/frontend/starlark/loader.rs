@@ -4,9 +4,11 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use starlark::PrintHandler;
 use starlark::environment::{FrozenModule, Globals, GlobalsBuilder, LibraryExtension, Module};
 use starlark::eval::{Evaluator, FileLoader};
 use starlark::syntax::{AstModule, Dialect};
@@ -17,7 +19,7 @@ use starlark::values::{FrozenValue, UnpackValue};
 use crate::frontend::starlark::builtins::{azad_globals, is_valid_tag, namespaces};
 use crate::frontend::starlark::values::CALL_NAME_PARAM;
 use crate::frontend::starlark::values::Collector;
-use crate::frontend::{Call, LocalRun, Package};
+use crate::frontend::{Call, LocalRun, Note, NoteLevel, Package};
 use crate::history::History;
 
 use crate::frontend::starlark::yaml::{self, TASKS_YAML_FILE};
@@ -45,7 +47,7 @@ pub enum EvalError {
     Starlark(String),
     #[error("{path}: {error}")]
     Io { path: PathBuf, error: std::io::Error },
-    #[error("package {0:?} has no {TASKS_FILE}")]
+    #[error("//{0} is not a package: it has no {TASKS_FILE} or {TASKS_YAML_FILE}")]
     NoTasks(String),
 }
 
@@ -59,19 +61,34 @@ struct Loader<'a> {
     dialect: Dialect,
     loaded: RefCell<HashMap<String, FrozenModule>>,
     loading: RefCell<Vec<String>>,
+    /// What `print()` printed, as notes, with the file that was evaluated when it printed.
+    printed: RefCell<Vec<Note>>,
+}
+
+impl PrintHandler for Loader<'_> {
+    fn println(&self, text: &str) -> starlark::Result<()> {
+        let file = self.loading.borrow().last().cloned().unwrap_or_default();
+        self.printed.borrow_mut().push(Note { level: NoteLevel::Normal, text: format!("{file} printed: {text}") });
+        Ok(())
+    }
 }
 
 impl<'a> Loader<'a> {
     fn new(root: &'a Path) -> Self {
         Loader {
             root,
-            globals: GlobalsBuilder::extended_by(&[LibraryExtension::StructType, LibraryExtension::Json])
-                .with(azad_globals)
-                .with(namespaces)
-                .build(),
+            globals: GlobalsBuilder::extended_by(&[
+                LibraryExtension::StructType,
+                LibraryExtension::Json,
+                LibraryExtension::Print,
+            ])
+            .with(azad_globals)
+            .with(namespaces)
+            .build(),
             dialect: Dialect::Extended,
             loaded: RefCell::new(HashMap::new()),
             loading: RefCell::new(Vec::new()),
+            printed: RefCell::new(Vec::new()),
         }
     }
 
@@ -99,15 +116,49 @@ impl<'a> Loader<'a> {
 
     /// The program that a package's `tasks.yaml` says (decision 0027); its errors name the file, not the program.
     fn read_yaml(&self, label: &str, path: &Path, package: &str) -> anyhow::Result<AstModule> {
-        let text = fs::read_to_string(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        let text = read_file(label, path)?;
         let program = yaml::to_starlark(package, &text).map_err(|e| anyhow::anyhow!("{label}: {e}"))?;
         AstModule::parse(label, program, &self.dialect).map_err(|e| anyhow::anyhow!("{label}: {e}"))
     }
 
     fn read(&self, label: &str, path: &Path) -> anyhow::Result<AstModule> {
-        let content = fs::read_to_string(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        let content = read_file(label, path)?;
         AstModule::parse(label, content.clone(), &self.dialect).map_err(|e| parse_error(label, &content, e))
     }
+
+    /// Evaluates the file `label` of the workspace with `extra`, and with the merged config of `configs` for a package's
+    /// file, and adds what it printed to `extra`'s notes.
+    fn evaluate(
+        &self,
+        label: &str,
+        ast: AstModule,
+        extra: &Collector,
+        configs: Option<&[FrozenModule]>,
+    ) -> Result<(), EvalError> {
+        self.loading.borrow_mut().push(label.to_owned());
+        let result = Module::with_temp_heap(|module| -> Result<(), EvalError> {
+            if let Some(configs) = configs {
+                module.set(CONFIG_NAME, merged_config(&module, configs).to_value());
+            }
+            let mut eval = Evaluator::new(&module);
+            eval.set_loader(self);
+            eval.set_print_handler(self);
+            eval.extra = Some(extra);
+            eval.eval_module(ast, &self.globals).map_err(starlark_error)?;
+            Ok(())
+        });
+        self.loading.borrow_mut().pop();
+        extra.defined.borrow_mut().notes.extend(self.printed.take());
+        result
+    }
+}
+
+/// The text of a `.star` or `tasks.yaml` file, by its label: errors name the label, not the host's path.
+fn read_file(label: &str, path: &Path) -> anyhow::Result<String> {
+    fs::read_to_string(path).map_err(|error| match error.kind() {
+        ErrorKind::NotFound => anyhow::anyhow!("{label} does not exist"),
+        _ => anyhow::anyhow!("{label}: {error}"),
+    })
 }
 
 // starlark 0.14.2 places an error at the end of a file after its last line, and its message then points to line 1 with
@@ -175,6 +226,7 @@ impl FileLoader for Loader<'_> {
             {
                 let mut eval = Evaluator::new(&module);
                 eval.set_loader(self);
+                eval.set_print_handler(self);
                 eval.eval_module(ast, &self.globals)?;
             }
             Ok(module.freeze()?)
@@ -234,14 +286,7 @@ pub fn evaluate_in(context: &Context, root: &Path, package: &str, platform: &str
         history: context.history.clone(),
         declared_package: Default::default(),
     };
-    Module::with_temp_heap(|module| -> Result<(), EvalError> {
-        module.set(CONFIG_NAME, merged_config(&module, &configs).to_value());
-        let mut eval = Evaluator::new(&module);
-        eval.set_loader(&loader);
-        eval.extra = Some(&collector);
-        eval.eval_module(ast, &loader.globals).map_err(starlark_error)?;
-        Ok(())
-    })?;
+    loader.evaluate(&module_label(package, TASKS_FILE), ast, &collector, Some(&configs))?;
     Ok(collector.defined.into_inner())
 }
 
@@ -359,13 +404,7 @@ pub fn expand(context: &Context, root: &Path, platform: &str, call: &Call) -> Re
         history: context.history.clone(),
         declared_package: Default::default(),
     };
-    Module::with_temp_heap(|module| -> Result<(), EvalError> {
-        let mut eval = Evaluator::new(&module);
-        eval.set_loader(&loader);
-        eval.extra = Some(&collector);
-        eval.eval_module(ast, &loader.globals).map_err(starlark_error)?;
-        Ok(())
-    })?;
+    loader.evaluate(&label, ast, &collector, None)?;
     Ok(collector.defined.into_inner())
 }
 

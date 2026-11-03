@@ -3,6 +3,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use crate::ir::graph::is_valid_name;
 use crate::ir::{Kind, Spec};
@@ -19,7 +20,7 @@ use crate::frontend::starlark::decode::{toml_functions, xml_functions, yaml_func
 use crate::frontend::starlark::git::git_functions;
 use crate::frontend::starlark::semver::semver_functions;
 use crate::frontend::starlark::values::{ActionValue, Collector, ModuleDef, ModuleSchema, Returns, SourceValue};
-use crate::frontend::starlark::workspace;
+use crate::frontend::starlark::{has_tasks_file, workspace};
 use crate::frontend::{
     Declarations, Dependencies, FileSelection, FileSet, GOAL_EVENTS, LocalRun, SourceSpec, Task, dependency_edge,
     label, parse_label, split_dependency, split_workspace_pattern,
@@ -42,7 +43,8 @@ fn source(value: Value<'_>, what: &str) -> anyhow::Result<SourceSpec> {
 const SHELL: &str = "sh";
 const SHELL_COMMAND_FLAG: &str = "-c";
 /// Dependencies in their canonical form; a package does not depend on itself.
-fn dependency_edges(package: &str, edges: Vec<String>, function: &str) -> anyhow::Result<Vec<String>> {
+/// The package of each dependency must exist, so that a typo fails where it is written.
+fn dependency_edges(root: &Path, package: &str, edges: Vec<String>, function: &str) -> anyhow::Result<Vec<String>> {
     edges
         .into_iter()
         .map(|edge| {
@@ -50,13 +52,17 @@ fn dependency_edges(package: &str, edges: Vec<String>, function: &str) -> anyhow
             if split_dependency(&edge) == (package, None) {
                 anyhow::bail!("{function}(): a package does not depend on itself, as {edge:?} would");
             }
+            let (dir, _) = split_dependency(&edge);
+            if !has_tasks_file(&root.join(dir)) {
+                anyhow::bail!("{function}(): {}", workspace::not_a_package(root, dir));
+            }
             Ok(edge)
         })
         .collect()
 }
 
 /// The `dependencies` of a task: `True`, `False`, or a list of dependencies.
-fn task_dependencies(package: &str, task: &str, value: Option<Value>) -> anyhow::Result<Dependencies> {
+fn task_dependencies(root: &Path, package: &str, task: &str, value: Option<Value>) -> anyhow::Result<Dependencies> {
     let Some(value) = value.filter(|value| !value.is_none()) else { return Ok(Dependencies::None) };
     if let Some(all) = value.unpack_bool() {
         return Ok(match all {
@@ -78,7 +84,7 @@ fn task_dependencies(package: &str, task: &str, value: Option<Value>) -> anyhow:
                 .ok_or_else(|| anyhow::anyhow!("task({task:?}): dependencies hold text"))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    Ok(Dependencies::Only(dependency_edges(package, edges, "task")?))
+    Ok(Dependencies::Only(dependency_edges(root, package, edges, "task")?))
 }
 
 /// The label of what a goal requires: an action or task value, or the name or label of one that this package defined.
@@ -512,7 +518,7 @@ pub(crate) fn azad_globals(builder: &mut GlobalsBuilder) {
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<ActionValue> {
         let collector = collector(eval, "task")?;
-        let dependencies = task_dependencies(&collector.package, name, dependencies)?;
+        let dependencies = task_dependencies(&collector.root, &collector.package, name, dependencies)?;
         let declared_at = call_site(eval);
         if !is_valid_name(name) || name.contains(['/', ':']) {
             anyhow::bail!("task(): the name {name:?} may hold only letters, digits, '_', '-' and '.'");
@@ -778,7 +784,7 @@ pub(crate) fn azad_globals(builder: &mut GlobalsBuilder) {
     /// # Arguments
     /// * `deps`: The package's immediate dependencies: packages, such as `"//libs/core"`, or the sets of files and
     ///   tasks of packages, such as `"//libs/core:contracts"`. A task with `dependencies = True` reads them, and
-    ///   what they depend on, so a package names only its own dependencies.
+    ///   what they depend on, so a package names only its own dependencies. Each names a package that exists.
     /// * `exports`: Patterns of the files that the package gives the tasks that depend on it, relative to it, such as
     ///   `["**/*.cs", "**/*.csproj"]`; by default, all that git tracks or would track below its directory, the files
     ///   of the packages nested in it too. Fewer files run fewer dependents again.
@@ -799,7 +805,7 @@ pub(crate) fn azad_globals(builder: &mut GlobalsBuilder) {
         if collector.declared_package.replace(true) {
             anyhow::bail!("package(): a file calls it once");
         }
-        let deps = dependency_edges(&collector.package, deps.items, "package")?;
+        let deps = dependency_edges(&collector.root, &collector.package, deps.items, "package")?;
         if let Some(pattern) = exports.items.iter().find(|p| split_workspace_pattern(p).is_some()) {
             anyhow::bail!("package(): exports are patterns of the package's own files, not {pattern:?}");
         }
@@ -837,7 +843,7 @@ pub(crate) fn azad_globals(builder: &mut GlobalsBuilder) {
         {
             anyhow::bail!("file_set({name:?}): its patterns are of the package's own files, not {pattern:?}");
         }
-        let deps = dependency_edges(&collector.package, deps.items, "file_set")?;
+        let deps = dependency_edges(&collector.root, &collector.package, deps.items, "file_set")?;
         let set_label = label(&collector.package, name);
         let selection = FileSelection { include: sources.items, exclude: exclude.items };
         let mut defined = collector.defined.borrow_mut();

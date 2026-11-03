@@ -540,7 +540,7 @@ What the package says of itself for the packages that depend on it (decision 002
 
 * `deps`: (defaults to: `[]`)
 
-  The package's immediate dependencies: packages, such as `"//libs/core"`, or the sets of files and tasks of packages, such as `"//libs/core:contracts"`. A task with `dependencies = True` reads them, and what they depend on, so a package names only its own dependencies.
+  The package's immediate dependencies: packages, such as `"//libs/core"`, or the sets of files and tasks of packages, such as `"//libs/core:contracts"`. A task with `dependencies = True` reads them, and what they depend on, so a package names only its own dependencies. Each names a package that exists.
 
 * `exports`: (defaults to: `[]`)
 

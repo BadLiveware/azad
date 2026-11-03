@@ -6,8 +6,9 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
-use crate::frontend::starlark::package_at;
 use crate::frontend::starlark::values::Collector;
+use crate::frontend::starlark::yaml::TASKS_YAML_FILE;
+use crate::frontend::starlark::{TASKS_FILE, package_at};
 use crate::frontend::{NoteLevel, WORKSPACE_PATTERN_PREFIX, split_workspace_pattern};
 use crate::ir::Digest;
 use crate::store::Selection;
@@ -15,6 +16,9 @@ use crate::store::Selection;
 const CURRENT_DIR: &str = ".";
 const PARENT_DIR: &str = "..";
 const BYTE_ORDER_MARK: char = '\u{feff}';
+const PACKAGE_FILES: [&str; 2] = ["//**/tasks.star", "//**/tasks.yaml"];
+/// A name within a third of its length of another is taken as a typo of it.
+const MAX_TYPO_SHARE: usize = 3;
 
 /// A path relative to the directory `dir`, or to the workspace root after `//`, as a normalized path relative to the
 /// root, "" for the root itself. An absolute path, and a path that leaves the workspace, are errors.
@@ -44,6 +48,52 @@ pub(crate) fn resolve(dir: &str, path: &str) -> Result<String, String> {
 /// A path relative to the root as the built-ins show it: `//src/App`, and `//` for the root.
 pub(crate) fn workspace_label(relative: &str) -> String {
     format!("{WORKSPACE_PATTERN_PREFIX}{relative}")
+}
+
+/// Why `dir` is not a package, with the nearest package by name when one is near enough to be a typo of it.
+pub(crate) fn not_a_package(root: &Path, dir: &str) -> String {
+    let problem = format!("{} is not a package: it has no {TASKS_FILE} or {TASKS_YAML_FILE}", workspace_label(dir));
+    let patterns = PACKAGE_FILES.map(str::to_owned);
+    let packages = list(root, &patterns, &[]).unwrap_or_default();
+    let dirs = packages
+        .iter()
+        .filter_map(|file| file.rsplit_once('/'))
+        .map(|(dir, _)| dir.trim_start_matches(WORKSPACE_PATTERN_PREFIX));
+    match nearest(dir, dirs) {
+        Some(near) => format!("{problem}; did you mean {}?", workspace_label(near)),
+        None => problem,
+    }
+}
+
+/// The candidate nearest to `name` by edit distance, when it is at most a third of the name's length away.
+fn nearest<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let most = (name.chars().count() / MAX_TYPO_SHARE).max(1);
+    candidates
+        .map(|candidate| (edit_distance(name, candidate), candidate))
+        .filter(|(distance, _)| *distance <= most)
+        .min()
+        .map(|(_, candidate)| candidate)
+}
+
+/// The edit distance with transpositions (optimal string alignment): how many characters to insert, delete or
+/// replace, or neighbours to swap, to make `a` into `b`.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut rows = vec![(0..=b.len()).collect::<Vec<usize>>()];
+    for i in 1..=a.len() {
+        let mut row = vec![i];
+        for j in 1..=b.len() {
+            let mut distance =
+                (rows[i - 1][j] + 1).min(row[j - 1] + 1).min(rows[i - 1][j - 1] + usize::from(a[i - 1] != b[j - 1]));
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                distance = distance.min(rows[i - 2][j - 2] + 1);
+            }
+            row.push(distance);
+        }
+        rows.push(row);
+    }
+    rows[a.len()][b.len()]
 }
 
 /// The text of a file of the workspace, which the package records with the digest of its content.
