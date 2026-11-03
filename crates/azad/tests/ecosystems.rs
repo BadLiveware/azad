@@ -504,3 +504,75 @@ fn dotnet_follows_imports_by_path_and_leaves_out_nuget_s_folder() {
     let package = evaluated(dir.path(), "apps/api").unwrap();
     assert_eq!(package.declared.deps, ["//libs/core"]);
 }
+
+#[test]
+fn dotnet_resolves_project_dir_and_leaves_out_what_the_build_writes() {
+    let dir = workspace(&[
+        ("BannedSymbols.txt", ""),
+        ("libs/rules/tasks.star", ""),
+        ("libs/rules/Rules.txt", ""),
+        (
+            "apps/api/Directory.Build.props",
+            r#"<Project><ItemGroup><AdditionalFiles Include="$(ProjectDir)..\..\libs\rules\Rules.txt" /></ItemGroup></Project>"#,
+        ),
+        (
+            "apps/api/Api.csproj",
+            r#"<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <_SdkPropsForPack>$(MSBuildProjectExtensionsPath)Sdk/Sdk.props</_SdkPropsForPack>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="$(_SdkPropsForPack)" Pack="true" />
+    <None Include="$(OutputPath)api.xml" />
+  </ItemGroup>
+</Project>"#,
+        ),
+        ("apps/api/tasks.star", &format!("{DOTNET}\npackage(deps = dependencies(\"Api.csproj\"))\n")),
+    ]);
+    let package = evaluated(dir.path(), "apps/api").unwrap();
+    assert_eq!(package.declared.deps, ["//libs/rules"]);
+}
+
+#[test]
+fn dotnet_dependencies_of_a_solution_are_the_packages_of_its_projects_and_what_they_need() {
+    let library = "<Project Sdk=\"Microsoft.NET.Sdk\" />";
+    let dir = workspace(&[
+        ("libs/core/tasks.star", ""),
+        ("libs/core/Core.csproj", library),
+        ("libs/oracle/tasks.star", ""),
+        (
+            "libs/oracle/Oracle.csproj",
+            r#"<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="..\core\Core.csproj" /></ItemGroup></Project>"#,
+        ),
+        (
+            "libs/oracle/Unbuilt.csproj",
+            r#"<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="..\..\apps\api\Api.csproj" /></ItemGroup></Project>"#,
+        ),
+        ("apps/api/Api.csproj", library),
+        (
+            "apps/api/Api.slnx",
+            r#"<Solution>
+  <Folder Name="/src/">
+    <Folder Name="/src/libs/">
+      <Project Path="..\..\libs\oracle\Oracle.csproj" />
+    </Folder>
+    <Project Path="Api.csproj" />
+  </Folder>
+  <File Path="..\..\README.md" />
+</Solution>"#,
+        ),
+        (
+            "apps/api/Api.sln",
+            "Microsoft Visual Studio Solution File, Format Version 12.00\r\n\
+             Project(\"{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}\") = \"Api\", \"Api.csproj\", \"{1}\"\r\nEndProject\r\n\
+             Project(\"{2150E333-8FDC-42A3-9474-1A3956D46DE8}\") = \"libs\", \"libs\", \"{2}\"\r\nEndProject\r\n\
+             Project(\"{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}\") = \"Oracle\", \"..\\..\\libs\\oracle\\Oracle.csproj\", \"{3}\"\r\n\
+             \tProjectSection(ProjectDependencies) = postProject\r\n\tEndProjectSection\r\nEndProject\r\n",
+        ),
+        ("apps/api/tasks.star", &showing(DOTNET, "[dependencies(\"Api.slnx\"), dependencies(\"Api.sln\")]")),
+    ]);
+    assert_eq!(
+        shown(dir.path(), "apps/api"),
+        json!([["//libs/core", "//libs/oracle"], ["//libs/core", "//libs/oracle"]])
+    );
+}

@@ -8,13 +8,16 @@ with `$([MSBuild]::GetPathOfFileAbove('<file>', '$(MSBuildThisFileDirectory)../'
 its path, relative to the importing file as MSBuild resolves it, optionally after `$(MSBuildThisFileDirectory)`; an
 import of a file that does not exist adds nothing. An import of the SDK, or of a file of the MSBuild toolset
 (`$(MSBuildToolsPath)`, `$(MSBuildExtensionsPath)`, `$(MSBuildExtensionsPath32)`, `$(MSBuildBinPath)` or
-`$(VSToolsPath)`), adds no project of the workspace and is not read. An item below NuGet's folder of packages
-(`$(NuGetPackageRoot)`, `$(NuGetPackageFolders)`, or `$(Pkg<Name>)`) names no file of the workspace, and is left out.
-Any other import, such as one by a property or a
+`$(VSToolsPath)`), adds no project of the workspace and is not read. Any other import, such as one by a property or a
 wildcard, is an error, because the module cannot know what it adds.
 
+An item below NuGet's folder of packages (`$(NuGetPackageRoot)`, `$(NuGetPackageFolders)`, or `$(Pkg<Name>)` when no
+file sets it), or below a folder that the build writes (`$(MSBuildProjectExtensionsPath)`,
+`$(BaseIntermediateOutputPath)`, `$(IntermediateOutputPath)`, `$(BaseOutputPath)`, `$(OutputPath)` or `$(OutDir)`),
+names no file of the workspace, and is left out, also through another property.
+
 A value can use `$(Name)` of a property that these files set without a Condition, and `$(MSBuildThisFileDirectory)`,
-`$(MSBuildProjectDirectory)` and `$(MSBuildProjectName)`. A value that the module needs and cannot resolve, such as a
+`$(MSBuildProjectDirectory)`, `$(ProjectDir)` and `$(MSBuildProjectName)`. A value that the module needs and cannot resolve, such as a
 property that the SDK, the command line or the environment sets, a property function, or a property that a Condition
 sets, is an error that names the file and the element. The module never guesses.
 
@@ -45,7 +48,21 @@ _TOOLSET_PROPERTIES = [
 ]
 # Properties that name NuGet's folder of packages, which is never in the workspace: an item below one names no file of
 # a package of the workspace. `$(Pkg<Name>)` is the folder of one package, from `GeneratePathProperty`.
-_PACKAGE_FOLDERS = ["$(NuGetPackageRoot)", "$(NuGetPackageFolders)", "$(Pkg"]
+_OUTSIDE_PROPERTIES = [
+    "nugetpackageroot",
+    "nugetpackagefolders",
+    "msbuildprojectextensionspath",
+    "baseintermediateoutputpath",
+    "intermediateoutputpath",
+    "baseoutputpath",
+    "outputpath",
+    "outdir",
+]
+_PACKAGE_PATH_PREFIX = "pkg"
+_PROJECT_EXTENSIONS = [".csproj", ".fsproj", ".vbproj"]
+_SOLUTION = ".sln"
+_XML_SOLUTION = ".slnx"
+_SOLUTION_FOLDER = "{2150E333-8FDC-42A3-9474-1A3956D46DE8}"
 _GROUPS = {"PropertyGroup": "property", "ItemGroup": "item"}
 _SCOPES = ["Choose", "When", "Otherwise", "ImportGroup"]
 
@@ -106,10 +123,14 @@ def _nearest(name, directory):
     return None
 
 def _known(text):
-    return struct(text = text, problem = None)
+    return struct(text = text, problem = None, outside = False)
 
 def _unknown(problem):
-    return struct(text = None, problem = problem)
+    return struct(text = None, problem = problem, outside = False)
+
+def _outside_workspace():
+    """The value of a property that names a folder outside the workspace, such as NuGet's or the build's output."""
+    return struct(text = None, problem = None, outside = True)
 
 def _file_frame(file, conditional, chain, state):
     """The elements of an MSBuild file to evaluate, each with whether a Condition holds it."""
@@ -227,7 +248,7 @@ def _value(definitions, name):
     held = [definition for definition in definitions if definition.conditional]
     if held:
         return _unknown("%s sets %s under a Condition, which the module does not evaluate" % (held[0].where, name))
-    return struct(text = definitions[0].text, problem = definitions[0].problem)
+    return struct(text = definitions[0].text, problem = definitions[0].problem, outside = definitions[0].outside)
 
 def _property(name, properties, file, project, where):
     """The value of `$(name)` in `file`."""
@@ -238,9 +259,15 @@ def _property(name, properties, file, project, where):
         return _known(_with_slash(dirname(file)))
     if key == "msbuildprojectdirectory":
         return _known(dirname(project))
+    if key == "projectdir":
+        return _known(_with_slash(dirname(project)))
     if key == "msbuildprojectname":
         return _known(_stem(basename(project)))
+    if key in _OUTSIDE_PROPERTIES:
+        return _outside_workspace()
     definitions = properties.get(key)
+    if not definitions and key.startswith(_PACKAGE_PATH_PREFIX):
+        return _outside_workspace()
     if not definitions:
         return _unknown(
             "%s: $(%s) is not set in the files that the module reads; the SDK, the command line or the environment " % (where, name) +
@@ -262,7 +289,7 @@ def _expand(text, properties, file, project, where):
         if end < 0:
             return _unknown("%s: %r has a $( that is not closed" % (where, text))
         value = _property(rest[start + 2:end], properties, file, project, where)
-        if value.problem != None:
+        if value.problem != None or value.outside:
             return value
         done, rest = done + rest[:start] + value.text, rest[end + 1:]
     fail("%s: %r has more than %d properties" % (where, text, _STEPS))
@@ -276,7 +303,13 @@ def _properties(entries, project):
         name = entry.element["tag"].lower()
         where = _where(entry.file, entry.element)
         value = _expand(entry.element["text"], properties, entry.file, project, where)
-        definition = struct(text = value.text, problem = value.problem, conditional = entry.conditional, where = where)
+        definition = struct(
+            text = value.text,
+            problem = value.problem,
+            outside = value.outside,
+            conditional = entry.conditional,
+            where = where,
+        )
         if entry.conditional:
             properties[name] = properties.get(name, []) + [definition]
         else:
@@ -405,10 +438,12 @@ def _items(state, project):
         if entry.kind != "item" or tag in _NAME_ITEMS:
             continue
         include = _include(entry.element)
-        if include == None or _in_package_folder(include):
+        if include == None:
             continue
         where = _where(entry.file, entry.element)
         value = _expand(include, state["properties"], entry.file, project, where)
+        if value.outside:
+            continue
         if value.problem != None:
             fail("%s; %s" % (value.problem, _BY_HAND))
         for text in [part for part in value.text.split(";") if part.strip()]:
@@ -416,10 +451,6 @@ def _items(state, project):
             if item != None and (item.pattern, item.reference) not in found:
                 found[(item.pattern, item.reference)] = item
     return [found[key] for key in sorted(found.keys())]
-
-def _in_package_folder(include):
-    """Whether an item's Include starts in NuGet's folder of packages, outside the workspace."""
-    return len([folder for folder in _PACKAGE_FOLDERS if include.strip().startswith(folder)]) > 0
 
 def _references(state, project):
     """The projects that `project` references, as struct(path, where), sorted by path."""
@@ -474,36 +505,106 @@ def _is_mine(item, own):
     return own != None and own != "//" and _is_within(item.path, own)
 
 def dependencies(path):
-    """The labels of the packages that a .NET project needs directly, sorted, without the project's own package; for
-    `package(deps = dependencies("src/App/App.csproj"))`.
+    """The labels of the packages that a .NET project or solution needs directly, sorted, without its own package; for
+    `package(deps = dependencies("App.slnx"))`.
 
-    They are the packages of the projects that it references, and of the files that its other items name outside its
-    package directory, such as `<Compile Include="../../libs/orders/src/*.cs" />`: for a wildcard, the package that
-    holds the directory before the first wildcard, and every package below that directory. An item's files that no
-    package holds are not a dependency; the standard parts take them as sources. Items count under every Condition.
-    Azad finds the dependencies of those packages through the packages themselves (decision 0028), so each package
-    names only its own. A referenced project that no package holds, and a path that the module cannot resolve, are
-    errors that name the file and the element.
+    For a project, they are the packages of the projects that it references, and of the files that its other items name
+    outside its package directory, such as `<Compile Include="../../libs/orders/src/*.cs" />`: for a wildcard, the
+    package that holds the directory before the first wildcard, and every package below that directory. An item's files
+    that no package holds are not a dependency; the standard parts take them as sources. Items count under every
+    Condition. Azad finds the dependencies of those packages through the packages themselves (decision 0028), so each
+    package names only its own.
+
+    For a solution, a `.slnx` or a `.sln` file, they are the packages that hold its projects, and the dependencies of
+    each of its `.csproj`, `.fsproj` and `.vbproj` projects. The solution, not the directory, says which projects a
+    build has.
+
+    A project that no package holds, and a path that the module cannot resolve, are errors that name the file and the
+    element.
 
     `path` is relative to the package, or to the root after `//`."""
-    project = workspace_path(path)
+    file = workspace_path(path)
+    if file.endswith(_XML_SOLUTION) or file.endswith(_SOLUTION):
+        return _solution_dependencies(file)
+    return _project_dependencies(file)
+
+def _project_dependencies(project):
+    """The labels of the packages that `project` needs directly, without its own package."""
     state = _evaluation(project)
     own = package_of(project)
     labels = []
     for item in _items(state, project):
         found = []
         if item.reference:
-            found = [package_of(item.path)]
+            found = [_holding_package(item.path, item.where)]
         elif not _is_mine(item, own):
             found = [package_of(item.path)] + _wildcard_packages(item)
-        if item.reference and found[0] == None:
-            fail("%s: no package holds %s: no directory at or above it has a tasks.star or a tasks.yaml; add one, or %s" % (
-                item.where,
-                item.path,
-                _BY_HAND,
-            ))
         labels += [label for label in found if label != None and label != own and label not in labels]
     return sorted(labels)
+
+def _holding_package(path, where):
+    """The label of the package that holds the project `path`, which `where` names."""
+    label = package_of(path)
+    if label == None:
+        fail("%s: no package holds %s: no directory at or above it has a tasks.star or a tasks.yaml; add one, or %s" % (
+            where,
+            path,
+            _BY_HAND,
+        ))
+    return label
+
+def _solution_dependencies(solution):
+    """The labels of the packages that the projects of `solution` are in and need, without the solution's own package."""
+    own = package_of(solution)
+    labels = []
+    for project in _solution_projects(solution):
+        found = [_holding_package(project.path, project.where)]
+        if [extension for extension in _PROJECT_EXTENSIONS if project.path.endswith(extension)]:
+            found += _project_dependencies(project.path)
+        labels += [label for label in found if label != own and label not in labels]
+    return sorted(labels)
+
+def _solution_projects(solution):
+    """The projects of a solution, as struct(path, where), in the order of the file."""
+    if solution.endswith(_XML_SOLUTION):
+        elements = _project_elements(xml.decode(read(solution)))
+        paths = [(_where(solution, element), element["attrs"]["Path"]) for element in elements]
+    else:
+        paths = _sln_projects(solution)
+    found = []
+    for where, path in paths:
+        resolved = join(dirname(solution), path.strip().replace("\\", "/"))
+        if resolved == None:
+            fail("%s: %r goes above the root of the workspace" % (where, path))
+        found.append(struct(path = resolved, where = where))
+    return found
+
+def _project_elements(element):
+    """The `<Project Path="...">` elements of a `.slnx` file, at any depth below `<Folder>` elements."""
+    found, queue = [], [element]
+    for _ in range(_STEPS):
+        if not queue:
+            return found
+        current = queue.pop(0)
+        queue += current["children"]
+        if current["tag"] == _PROJECT and "Path" in current["attrs"]:
+            found.append(current)
+    fail("dotnet: a solution has more than %d elements" % _STEPS)
+
+def _sln_projects(solution):
+    """The projects of a `.sln` file, as (where, path), without its solution folders: each project is a line
+    `Project("{type}") = "Name", "path", "{id}"`."""
+    found = []
+    for number, line in enumerate(read(solution).splitlines()):
+        line = line.strip()
+        if not line.startswith(_PROJECT + "(") or "=" not in line:
+            continue
+        kind = line.split("=", 1)[0]
+        fields = [field.strip().strip('"') for field in line.split("=", 1)[1].split(",")]
+        if _SOLUTION_FOLDER in kind.upper() or len(fields) < 2:
+            continue
+        found.append(("%s:%d" % (solution, number + 1), fields[1]))
+    return found
 
 def _wildcard_packages(item):
     """The packages below the directory of an item's wildcard, whose files the wildcard can match."""

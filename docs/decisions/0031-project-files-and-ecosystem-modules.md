@@ -79,3 +79,16 @@ Examples: a property that the SDK, the command line or the environment sets, a p
 - The standard parts of .NET name their tasks after the tool (`dotnet-build`), so a package has one .NET project in them; a package with more chooses its own parts.
 - A project that uses more of MSBuild than the module reads gets an error, not a wrong graph.
 - Whether a task's declared sources hold what it reads is still not checked; a trace in the sandbox can do that later (`docs/plan.md`).
+
+## Amendment, 2026-11-03: solutions, `$(ProjectDir)` and the build's folders
+
+A trial on a large repository found three gaps in the .NET module.
+
+- `dependencies()` takes a solution, a `.slnx` or a `.sln` file, as well as a project.
+  A package builds a solution, and the solution, not the directory, says which projects are in the build.
+  Taking every project file below a directory can add a project that only another package's solution builds, and so make a cycle.
+  The dependencies of a solution are the packages that hold its projects, and the dependencies of each of its `.csproj`, `.fsproj` and `.vbproj` projects, without the solution's own package.
+  A `.slnx` lists its projects as `<Project Path="...">` elements at any depth below `<Folder>` elements; a `.sln` lists them as `Project(...)` lines, and its solution folders are left out.
+- `$(ProjectDir)` resolves to the project's directory with a `/` at its end, as the SDK sets it.
+- An item below a folder that the build writes (`$(MSBuildProjectExtensionsPath)`, `$(BaseIntermediateOutputPath)`, `$(IntermediateOutputPath)`, `$(BaseOutputPath)`, `$(OutputPath)` or `$(OutDir)`) names no file of the workspace, and is left out, as an item below NuGet's folder of packages is.
+  This also holds when another property holds the folder, such as `<None Include="$(_SdkPropsForPack)" />` with `$(MSBuildProjectExtensionsPath)` in that property.
