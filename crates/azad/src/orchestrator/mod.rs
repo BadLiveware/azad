@@ -244,10 +244,11 @@ impl Orchestrator {
         let engine = Engine::new(config).map_err(|e| e.to_string())?;
         let checks = self.check_runs(id, event, &engine)?;
         for (goal, check) in &checks {
-            let target = GoalTarget { name: goal, repository, check: *check };
+            let page = self.run_page(id);
+            let target = GoalTarget { name: goal, repository, check: *check, page: page.as_deref() };
             let (conclusion, output) = self.run_goal(&engine, &target, &mut recorder)?;
             self.checks
-                .update(repository, *check, CheckStatus::Completed, Some(conclusion), &output)
+                .update(repository, *check, CheckStatus::Completed, Some(conclusion), &linked(&target, output))
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -319,9 +320,15 @@ impl Orchestrator {
 
     /// Shows a running goal's output on its check run; a failure to show it does not stop the goal.
     fn show(&self, target: &GoalTarget<'_>, output: &CheckOutput) {
-        if let Err(e) = self.checks.update(target.repository, target.check, CheckStatus::InProgress, None, output) {
+        let output = linked(target, output.clone());
+        if let Err(e) = self.checks.update(target.repository, target.check, CheckStatus::InProgress, None, &output) {
             eprintln!("azad-orchestrator: the progress of {} cannot be shown: {e}", target.name);
         }
+    }
+
+    /// The page of run `id` on the site, when there is a site.
+    fn run_page(&self, id: u64) -> Option<String> {
+        self.site.as_ref().map(|site| format!("{site}/runs/{id}"))
     }
 
     /// The check run of each goal that the event runs: made once, and kept with the run, so that a run that starts
@@ -333,7 +340,7 @@ impl Orchestrator {
         let targets = engine.targets().map_err(|e| e.to_string())?;
         let mut checks = BTreeMap::new();
         for target in targets.into_iter().filter(|target| target.events.contains(event.kind.name())) {
-            let details = self.site.as_ref().map(|site| format!("{site}/runs/{id}"));
+            let details = self.run_page(id);
             let check = self
                 .checks
                 .create(&event.repository.full_name, &event.head_sha, &target.target, details.as_deref())
@@ -350,6 +357,18 @@ struct GoalTarget<'a> {
     name: &'a str,
     repository: &'a str,
     check: u64,
+    /// The run's page on the site.
+    page: Option<&'a str>,
+}
+
+/// The output with a link to the run's page at the start of its summary. GitHub's page of a check run does not show a
+/// `details_url` of plain HTTP, such as a site on a host's loopback address, but it shows a link in the summary.
+fn linked(target: &GoalTarget<'_>, output: CheckOutput) -> CheckOutput {
+    let Some(page) = target.page else { return output };
+    CheckOutput {
+        summary: format!("[See the run and its whole output on Azad's site]({page})\n\n{}", output.summary),
+        ..output
+    }
 }
 
 /// The event of the record that a run's progress gives.

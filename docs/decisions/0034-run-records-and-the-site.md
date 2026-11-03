@@ -36,3 +36,8 @@ Azad's hosts are VMs on a developer's machine (`docs/plan.md`), so the site runs
 - `crates/azad/tests/orchestrator.rs` proves that a run's record holds its trust level, its goal, its steps in order, and every line of a step's output, and that a check run links to its run's page.
 - The workspace builds the site's server half with the other crates; its browser half needs the `wasm32-unknown-unknown` target and `cargo-leptos`.
 - Decision 0029 gets a fifth binary, `azad-site`, for the same hosts as `azad-orchestrator`.
+
+## Amendment, 2026-11-03: a link in the summary
+
+GitHub's page of a check run does not use a `details_url` of plain HTTP on a loopback address, such as the development host's site: its link goes back to the check run.
+So the summary of each check run also starts with a link to its run's page, which GitHub shows; the `details_url` stays, for a site with an HTTPS address.

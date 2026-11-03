@@ -406,6 +406,11 @@ fn a_check_run_shows_the_steps_metrics_and_the_output_of_a_failed_step() {
     f.simulator(SECRET).push("main").unwrap();
     let check = f.completed(&sha).remove(0);
     assert_eq!(check.details_url.as_deref(), Some("http://site.test/runs/1"), "the check run links to its run's page");
+    assert!(
+        check.summary.starts_with("[See the run and its whole output on Azad's site](http://site.test/runs/1)\n\n"),
+        "the summary links to it too, for GitHub's page: {}",
+        check.summary
+    );
     assert_eq!(check.conclusion, Some(Conclusion::Failure));
     assert_eq!(check.title, "1 ran, 0 cached, 1 failed");
     let rows: Vec<&str> =
