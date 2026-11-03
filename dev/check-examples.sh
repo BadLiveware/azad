@@ -4,8 +4,16 @@
 # Usage: dev/check-examples.sh [azad binary]   (without a binary, it builds target/debug/azad first)
 set -euo pipefail
 
-repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+repo=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo"
+# An isolated run's work directory holds the files without their git repository, and the GHA examples copy the working
+# tree as git sees it, so the files get a repository of their own while the script runs.
+if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    trap 'rm -rf "$repo/.git"' EXIT
+    git init --quiet
+    git add --all
+    git -c user.name=azad -c user.email=azad@example.com -c commit.gpgsign=false commit --quiet --message examples
+fi
 if [ $# -eq 0 ]; then
     cargo build --quiet -p azad-cli
     cargo build --quiet -p azad-gha-runner --target x86_64-unknown-linux-musl
