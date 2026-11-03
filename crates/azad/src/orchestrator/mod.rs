@@ -449,7 +449,6 @@ impl Orchestrator {
             isolated: true,
             trust: trust(event, &checkout),
             color: false,
-            force: false,
             ..self.engine.clone()
         };
         let mut recorder = record::Recorder::open(&self.runs.run_dir(id)).map_err(|e| e.to_string())?;

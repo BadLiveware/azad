@@ -32,3 +32,14 @@ Azad's own CI is the first such repository, and running its CI through the orche
   It does not gate a release yet: it runs next to `//:check`, which keeps the sandbox tests and the examples.
 - The CLI test runs `azad-orchestrator gha` with an event file and a fake of GitHub's API: it writes a check run with the job's token, and a task without an image fails it and never runs on the runner.
 - The sandbox tests still run on the host, because they start bubblewrap; a sandbox in a sandbox needs a decision of its own.
+
+## Amendment, 2026-11-03: forced runs, and one lock for each mirror
+
+- In Azad's CI, the job `orchestrator` starts after the build of its binary, and by then `//:check` has stored the results of the same steps at the same trust level.
+  So each of its steps was a hit, and the job proved only that the orchestrator reads the event, the cache and the check runs.
+- `azad-orchestrator gha --force` runs every step again, as `azad run --force` does, and the action gives it the input `force`.
+  The orchestrator keeps the `force` of its engine's configuration, which `serve` never sets.
+- The job `orchestrator` runs forced while it runs next to `//:check`, so that it proves that its steps run in the orchestrator's sandbox in GHA.
+  When it replaces `//:check`, it stops forcing, and hits from earlier commits are what it is for.
+- Runs at the same time fetched into the same refs of a repository's mirror, and git failed one of them.
+  A file lock beside the mirror now holds it for one fetch, checkout or removal at a time.

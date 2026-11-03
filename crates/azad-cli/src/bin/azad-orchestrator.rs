@@ -89,6 +89,9 @@ enum OrchestratorCommand {
         /// How many actions run at the same time.
         #[arg(long, default_value_t = orchestrator::DEFAULT_PARALLELISM)]
         parallelism: usize,
+        /// Run every step again, even when the cache knows its result, as `azad run --force`.
+        #[arg(long)]
+        force: bool,
     },
     /// List the check runs that `serve` wrote, oldest first.
     Checks,
@@ -163,7 +166,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             eprintln!("azad-orchestrator: pull request {number} from {branch}: {answer}");
             Ok(())
         }
-        OrchestratorCommand::Gha { cache, parallelism } => return gha(config, &cache, parallelism),
+        OrchestratorCommand::Gha { cache, parallelism, force } => {
+            config.force = force;
+            return gha(config, &cache, parallelism);
+        }
         OrchestratorCommand::Checks => checks(&config),
     };
     done.map(|()| ExitCode::SUCCESS)

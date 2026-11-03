@@ -38,7 +38,7 @@ inputs:
     required: false
     default: normal
   force:
-    description: Whether to run every action that the goal needs again, even when its result is known, as `azad run --force`.
+    description: Whether to run every action that the goal needs again, even when its result is known, as `azad run --force`; with `orchestrate`, every step of each goal.
     required: false
     default: "false"
   include:

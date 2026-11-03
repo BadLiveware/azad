@@ -188,7 +188,11 @@ function orchestrateArgs() {
   if (input("goal")) {
     throw new Error("the orchestrator runs the goals that name the job's event: give the action no goal");
   }
-  return ["gha", "--cache", input("cache"), "--parallelism", input("jobs")];
+  const args = ["gha", "--cache", input("cache"), "--parallelism", input("jobs")];
+  if (input("force") === "true") {
+    args.push("--force");
+  }
+  return args;
 }
 
 async function main() {

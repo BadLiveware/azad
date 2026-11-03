@@ -17,7 +17,8 @@ use azad::executor::{ExecutorService, ServiceSandbox};
 use azad::ir::Image;
 use azad::oci::Puller;
 use azad::orchestrator::{
-    CheckRun, CheckStatus, Conclusion, GitHub, Orchestrator, SIGNATURE_HEADER, Simulator, fake_github, sign,
+    CheckRun, CheckStatus, Conclusion, Event, EventKind, GitHub, Orchestrator, Repository, SIGNATURE_HEADER, Simulator,
+    fake_github, sign,
 };
 use azad::sandbox::Limits;
 use azad::store::{Selection, Store};
@@ -608,4 +609,32 @@ goal("second", require = [shared, two], on = ["push"])
     let ran = shared.iter().filter(|tail| tail.iter().any(|line| line == "shared output")).count();
     let waited = shared.iter().filter(|tail| tail.iter().any(|line| line.contains("waits for its result"))).count();
     assert_eq!((ran, waited), (1, 1), "the shared step runs once: {shared:?}");
+}
+
+fn push_event(f: &Fixture, branch: &str, sha: &str) -> Event {
+    let repository = Repository {
+        full_name: "owner/repo".to_owned(),
+        clone_url: f.repo.display().to_string(),
+        default_branch: "main".to_owned(),
+    };
+    let git_ref = format!("refs/heads/{branch}");
+    Event { kind: EventKind::Push, repository, git_ref, head_sha: sha.to_owned(), pull_request: None, rerun: None }
+}
+
+/// A forced orchestrator runs each step again, also the steps whose results the cache knows, as `azad run --force` does,
+/// so that a run in a GHA job next to another that filled the cache proves that its steps run (decision 0036).
+#[test]
+fn a_forced_run_runs_the_steps_that_the_cache_knows() {
+    let f = fixture();
+    let main = git(&f.repo, &["rev-parse", "HEAD"]);
+    git(&f.repo, &["branch", "change"]);
+    let once = |force: bool, branch: &str| {
+        let config = EngineConfig { force, ..f.config(f.dir.path(), Trust::Main) };
+        Orchestrator::new(config, SECRET).run_once(&push_event(&f, branch, &main)).unwrap()
+    };
+
+    assert_eq!(once(false, "main")["//:check"], Conclusion::Success);
+    assert_eq!(once(true, "change")["//:check"], Conclusion::Success);
+    let titles: Vec<String> = f.completed(&main).into_iter().map(|run| run.title).collect();
+    assert_eq!(titles, ["2 ran, 0 cached, 0 failed", "2 ran, 0 cached, 0 failed"], "a branch would hit main's results");
 }

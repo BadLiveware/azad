@@ -101,7 +101,7 @@ Things that are not done, from earlier work; each one is taken when a use needs 
   A cached step has no time, because a result does not store how long its action took.
 - **Runs.**
   The executions of a local run live in memory, so a run does not survive a restart of `azad`.
-  `//:isolated-check` names events, and the orchestrator runs it in Azad's CI; the sandbox tests and the examples run on the host, so they are not in it.
+  `//:isolated-check` names events, and the orchestrator runs it in Azad's CI, forced, next to `//:check`; the sandbox tests and the examples run on the host, so they are not in it.
 - **Platforms.**
   The task runner runs on Linux and macOS; isolated runs, the executor and the orchestrator need Linux, and the microVM sandbox needs x86_64.
   Windows is not supported.

@@ -388,6 +388,7 @@ jobs:
       - uses: ./
         with:
           orchestrate: "true"
+          force: "true"
           binary: ${{ runner.temp }}/release/azad-orchestrator
           signing-key: ${{ secrets.AZAD_SIGNING_KEY }}
 
