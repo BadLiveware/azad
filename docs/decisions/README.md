@@ -40,3 +40,4 @@ A decision is not edited after it is made; a later decision replaces it and says
 | [0033](0033-what-a-check-run-shows.md) | What a check run shows: the steps, metrics and the end of their output | Accepted, 2026-11-03 |
 | [0034](0034-run-records-and-the-site.md) | A record of each run, and a site of the runs in Leptos | Accepted, 2026-11-03 |
 | [0035](0035-runs-at-the-same-time-cancels-and-reruns.md) | Runs and goals at the same time, cancels of outdated runs, re-runs, and one check run for each goal and commit | Accepted, 2026-11-03 |
+| [0036](0036-the-orchestrator-in-a-gha-job.md) | The orchestrator in a GHA job: the job's event, its token and the GHA cache | Accepted, 2026-11-03 |

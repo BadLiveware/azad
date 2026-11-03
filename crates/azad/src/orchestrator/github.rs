@@ -1,6 +1,6 @@
-//! A GitHub App (decision 0032): the orchestrator signs in as the App with its private key, gets a short-lived token
-//! for the installation of each repository, writes check runs through GitHub's REST API, and fetches private
-//! repositories with the same token.
+//! GitHub's REST API, as a GitHub App (decision 0032) or with a token. As an App, the orchestrator signs in with the
+//! App's private key and gets a short-lived token for the installation of each repository; in a GHA job, it uses the
+//! job's token (decision 0036). With the token, it writes check runs and fetches private repositories.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -48,63 +48,89 @@ struct Token {
     expires: SystemTime,
 }
 
-/// A GitHub App, through GitHub's REST API at `api`.
-pub struct GitHubApp {
-    app_id: String,
-    key: RsaKeyPair,
+/// GitHub, through its REST API at `api`, with the credentials of an App or a token.
+pub struct GitHub {
+    credentials: Credentials,
     api: String,
     agent: ureq::Agent,
+}
+
+enum Credentials {
+    App(Box<App>),
+    /// A token for each repository, such as the token of a GHA job.
+    Token(String),
+}
+
+struct App {
+    app_id: String,
+    key: RsaKeyPair,
     /// The token of each repository's installation.
     tokens: Mutex<HashMap<String, Token>>,
 }
 
-impl fmt::Debug for GitHubApp {
+impl fmt::Debug for GitHub {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GitHubApp").field("app_id", &self.app_id).field("api", &self.api).finish_non_exhaustive()
+        let mut debug = f.debug_struct("GitHub");
+        if let Credentials::App(app) = &self.credentials {
+            debug.field("app_id", &app.app_id);
+        }
+        debug.field("api", &self.api).finish_non_exhaustive()
     }
 }
 
-impl GitHubApp {
+impl GitHub {
     /// The App `app_id`, with its private key in PEM, as GitHub gives it to download.
-    pub fn new(app_id: &str, private_key_pem: &str, api: &str) -> Result<Self, GitHubError> {
+    pub fn app(app_id: &str, private_key_pem: &str, api: &str) -> Result<Self, GitHubError> {
+        let app = App { app_id: app_id.to_owned(), key: key_pair(private_key_pem)?, tokens: Mutex::default() };
+        let credentials = Credentials::App(Box::new(app));
+        Ok(GitHub::with_credentials(credentials, api))
+    }
+
+    /// GitHub with `token`, such as the token of a GHA job, which needs the permission to write checks.
+    pub fn with_token(token: &str, api: &str) -> Self {
+        GitHub::with_credentials(Credentials::Token(token.to_owned()), api)
+    }
+
+    fn with_credentials(credentials: Credentials, api: &str) -> Self {
         let agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
-        Ok(GitHubApp {
-            app_id: app_id.to_owned(),
-            key: key_pair(private_key_pem)?,
-            api: api.trim_end_matches('/').to_owned(),
-            agent,
-            tokens: Mutex::new(HashMap::new()),
-        })
+        GitHub { credentials, api: api.trim_end_matches('/').to_owned(), agent }
     }
 
     /// The token that signs the App in, a JSON Web Token (JWT) signed with RS256.
-    fn app_token(&self) -> Result<String, GitHubError> {
+    fn app_token(app_id: &str, key: &RsaKeyPair) -> Result<String, GitHubError> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
         let issued = (now - CLOCK_SKEW).as_secs();
         let expires = (now + APP_TOKEN_LIFETIME).as_secs();
         let header = URL_SAFE_NO_PAD.encode(json!({ "alg": "RS256", "typ": "JWT" }).to_string());
-        let claims = URL_SAFE_NO_PAD.encode(json!({ "iat": issued, "exp": expires, "iss": self.app_id }).to_string());
+        let claims = URL_SAFE_NO_PAD.encode(json!({ "iat": issued, "exp": expires, "iss": app_id }).to_string());
         let signed = format!("{header}.{claims}");
-        let mut signature = vec![0; self.key.public().modulus_len()];
-        self.key
-            .sign(&RSA_PKCS1_SHA256, &SystemRandom::new(), signed.as_bytes(), &mut signature)
+        let mut signature = vec![0; key.public().modulus_len()];
+        key.sign(&RSA_PKCS1_SHA256, &SystemRandom::new(), signed.as_bytes(), &mut signature)
             .map_err(|_| GitHubError::Key("it cannot sign".to_owned()))?;
         Ok(format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature)))
     }
 
-    /// The token of the App's installation on `repository` (`owner/name`), from the cache while it lives.
+    /// The token for `repository` (`owner/name`): the token that GitHub was given, or the token of the App's
+    /// installation on it, from the cache while it lives.
     pub fn token(&self, repository: &str) -> Result<String, GitHubError> {
-        let cached = self.tokens.lock().ok().and_then(|tokens| tokens.get(repository).cloned());
+        match &self.credentials {
+            Credentials::Token(token) => Ok(token.clone()),
+            Credentials::App(app) => self.installation_token(app, repository),
+        }
+    }
+
+    fn installation_token(&self, app: &App, repository: &str) -> Result<String, GitHubError> {
+        let cached = app.tokens.lock().ok().and_then(|tokens| tokens.get(repository).cloned());
         if let Some(token) = cached.filter(|token| SystemTime::now() + TOKEN_MARGIN < token.expires) {
             return Ok(token.value);
         }
-        let app = self.app_token()?;
-        let installation = self.call(Method::Get, &format!("/repos/{repository}/installation"), &app, None)?;
+        let signed_in = GitHub::app_token(&app.app_id, &app.key)?;
+        let installation = self.call(Method::Get, &format!("/repos/{repository}/installation"), &signed_in, None)?;
         let id = installation
             .get("id")
             .and_then(Value::as_u64)
             .ok_or_else(|| api_error("the installation", &installation))?;
-        let answer = self.call(Method::Post, &format!("/app/installations/{id}/access_tokens"), &app, None)?;
+        let answer = self.call(Method::Post, &format!("/app/installations/{id}/access_tokens"), &signed_in, None)?;
         let value = answer.get("token").and_then(Value::as_str).ok_or_else(|| api_error("a token", &answer))?;
         let expires = answer
             .get("expires_at")
@@ -113,7 +139,7 @@ impl GitHubApp {
             .map(|time| UNIX_EPOCH + Duration::from_secs(time.as_second().max(0) as u64))
             .ok_or_else(|| api_error("the end of a token", &answer))?;
         let token = Token { value: value.to_owned(), expires };
-        if let Ok(mut tokens) = self.tokens.lock() {
+        if let Ok(mut tokens) = app.tokens.lock() {
             tokens.insert(repository.to_owned(), token.clone());
         }
         Ok(token.value)
@@ -166,7 +192,7 @@ fn headers<B>(request: ureq::RequestBuilder<B>, token: &str) -> ureq::RequestBui
         .header("Content-Type", "application/json")
 }
 
-impl CheckRuns for Arc<GitHubApp> {
+impl CheckRuns for Arc<GitHub> {
     fn create(&self, repository: &str, head_sha: &str, name: &str, details_url: Option<&str>) -> io::Result<u64> {
         let mut body = json!({ "name": name, "head_sha": head_sha, "status": "queued" });
         if let Some(url) = details_url {

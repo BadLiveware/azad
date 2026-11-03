@@ -48,6 +48,7 @@ The word itself is *āzād* (آزاد), "free" in Persian, Kurdish, Urdu and Hin
 - GHA+ hints: a step that says what it reads and writes is skipped when those files did not change.
 - Remote caches (a directory, or the GitHub Actions cache), with signed entries, and Azad as a GitHub Action (`action.yml`), which installs a release of Azad; [azad-action-example](https://github.com/BadLiveware/azad-action-example) is a repository that uses it.
 - Its own CI, on one machine: a microVM sandbox (Cloud Hypervisor), the executor as a service, and an orchestrator that takes GitHub's webhooks and gives check runs.
+  The orchestrator also runs in a GitHub Actions job, with the action's `orchestrate: true`: it runs the goals that name the job's event, with a check run for each.
 
 ## Install
 
@@ -63,7 +64,7 @@ Each kind of user needs one binary (decision 0029):
 | `azad` | Everyone: the task runner, and the Azad action in GitHub Actions, which installs it from a release | Linux, macOS |
 | `azad-gha-runner` | Only to run GHA workflow files through Azad; put it next to `azad` | Linux |
 | `azad-executor` | Hosts that run CI; its archive holds `azad-guest`, the init of its microVMs | Linux |
-| `azad-orchestrator` | The service that takes GitHub's events and runs their goals | Linux |
+| `azad-orchestrator` | The service that takes GitHub's events and runs their goals, or the action with `orchestrate: true` | Linux |
 
 The binaries are in each [release](https://github.com/BadLiveware/azad/releases), one archive for each binary and system.
 `azad` is also in two OCI images: `ghcr.io/badliveware/azad-bin`, from `scratch`, which holds only `azad`, and `ghcr.io/badliveware/azad`, which adds bubblewrap and git.

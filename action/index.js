@@ -1,6 +1,8 @@
 // Runs an Azad goal in a GitHub Actions job: installs a release of Azad, prepares the sandbox, passes the cache
 // service's address and token on (they are in this process's environment), and sets the outputs from Azad's report.
-// While Azad runs, problem matchers turn the plain error lines of tools such as Cargo into annotations.
+// While Azad runs, problem matchers turn the plain error lines of tools such as Cargo into annotations. With
+// `orchestrate`, it runs Azad's orchestrator instead, which runs the goals that name the job's event, each with a check
+// run (decision 0036).
 
 const { spawn, spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
@@ -17,8 +19,13 @@ const LATEST = "latest";
 const RELEASE_TAG = /^v\d+\.\d{8}\.\d+$/;
 // The GHA runner goes next to azad, which finds it there when a goal is a workflow file.
 const PROGRAMS = ["azad", "azad-gha-runner"];
+const ORCHESTRATOR = "azad-orchestrator";
 const ARCHITECTURES = { x64: "x86_64", arm64: "aarch64" };
 const INSTALLED_MARK = ".installed";
+
+function orchestrating() {
+  return input("orchestrate") === "true";
+}
 
 function input(name) {
   return (process.env[`INPUT_${name.toUpperCase()}`] || "").trim();
@@ -79,8 +86,8 @@ async function installProgram(release, program, target, dir) {
   fs.rmSync(file);
 }
 
-// Installs the release's programs in the runner's tool cache, which a self-hosted runner keeps between jobs, and
-// returns the path of azad.
+// Installs the release's programs that the job needs in the runner's tool cache, which a self-hosted runner keeps
+// between jobs, and returns the path of the one to run.
 async function installRelease() {
   const target = releaseTarget();
   const repository = process.env.GITHUB_ACTION_REPOSITORY || AZAD_REPOSITORY;
@@ -91,13 +98,14 @@ async function installRelease() {
   const dir = path.join(process.env.RUNNER_TOOL_CACHE || os.tmpdir(), "azad", version, target);
   const release = `${GITHUB_URL}/${repository}/releases/download/v${version}`;
   console.log(`Azad ${version} from ${release}`);
-  if (!fs.existsSync(path.join(dir, INSTALLED_MARK))) {
-    fs.rmSync(dir, { recursive: true, force: true });
-    fs.mkdirSync(dir, { recursive: true });
-    await Promise.all(PROGRAMS.map((program) => installProgram(release, program, target, dir)));
-    fs.writeFileSync(path.join(dir, INSTALLED_MARK), "");
+  const programs = orchestrating() ? [...PROGRAMS, ORCHESTRATOR] : PROGRAMS;
+  const missing = programs.filter((program) => !fs.existsSync(path.join(dir, `${INSTALLED_MARK}-${program}`)));
+  fs.mkdirSync(dir, { recursive: true });
+  await Promise.all(missing.map((program) => installProgram(release, program, target, dir)));
+  for (const program of missing) {
+    fs.writeFileSync(path.join(dir, `${INSTALLED_MARK}-${program}`), "");
   }
-  return path.join(dir, "azad");
+  return path.join(dir, orchestrating() ? ORCHESTRATOR : "azad");
 }
 
 // A binary that the workflow built, as Azad's own CI does, or a release.
@@ -153,14 +161,12 @@ function setOutputs(reportFile) {
   fs.appendFileSync(process.env.GITHUB_OUTPUT, lines);
 }
 
-async function main() {
-  const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
-  const binary = await azad(workspace);
-  prepareSandbox();
-  const reportFile = path.join(process.env.RUNNER_TEMP || os.tmpdir(), `azad-report-${process.pid}.json`);
+// The command line of azad: the goal, with the action's settings.
+function runArgs(reportFile) {
+  if (!input("goal")) {
+    throw new Error("give the action a goal to run, or `orchestrate: true`");
+  }
   const args = ["run", input("goal"), "--isolated", "--cache", input("cache"), "--output", "github", "--report", reportFile, "-j", input("jobs"), "--verbosity", input("verbosity")];
-  // AZAD_CONFIG is empty, so that CI never reads personal defaults.
-  const env = { ...process.env, AZAD_SIGNING_KEY: input("signing-key"), AZAD_GITHUB_TOKEN: input("github-token"), AZAD_CONFIG: "" };
   if (input("force") === "true") {
     args.push("--force");
   }
@@ -174,6 +180,25 @@ async function main() {
     args.push("--github-history", process.env.GITHUB_REPOSITORY);
     args.push("--github-graphql-url", process.env.GITHUB_GRAPHQL_URL || "https://api.github.com/graphql");
   }
+  return args;
+}
+
+// The command line of the orchestrator, which reads the job's event and writes check runs with the job's token.
+function orchestrateArgs() {
+  if (input("goal")) {
+    throw new Error("the orchestrator runs the goals that name the job's event: give the action no goal");
+  }
+  return ["gha", "--cache", input("cache"), "--parallelism", input("jobs")];
+}
+
+async function main() {
+  const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+  const binary = await azad(workspace);
+  prepareSandbox();
+  const reportFile = path.join(process.env.RUNNER_TEMP || os.tmpdir(), `azad-report-${process.pid}.json`);
+  const args = orchestrating() ? orchestrateArgs() : runArgs(reportFile);
+  // AZAD_CONFIG is empty, so that CI never reads personal defaults.
+  const env = { ...process.env, AZAD_SIGNING_KEY: input("signing-key"), AZAD_GITHUB_TOKEN: input("github-token"), AZAD_CONFIG: "" };
   addMatchers();
   const child = spawn(binary, args, { stdio: "inherit", env, cwd: workspace });
   // On a cancel, Azad prints the output that it kept, so pass the signal on.

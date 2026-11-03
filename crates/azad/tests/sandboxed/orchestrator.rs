@@ -17,7 +17,7 @@ use azad::executor::{ExecutorService, ServiceSandbox};
 use azad::ir::Image;
 use azad::oci::Puller;
 use azad::orchestrator::{
-    CheckRun, CheckStatus, Conclusion, GitHubApp, Orchestrator, SIGNATURE_HEADER, Simulator, fake_github, sign,
+    CheckRun, CheckStatus, Conclusion, GitHub, Orchestrator, SIGNATURE_HEADER, Simulator, fake_github, sign,
 };
 use azad::sandbox::Limits;
 use azad::store::{Selection, Store};
@@ -357,7 +357,7 @@ fn is_app_token(token: &str) -> bool {
 fn check_runs_go_to_github_through_the_installation_of_the_app() {
     let mut f = fixture();
     let (api, calls) = fake_api();
-    let app = GitHubApp::new(APP_ID, APP_KEY, &api).unwrap();
+    let app = GitHub::app(APP_ID, APP_KEY, &api).unwrap();
     f.serve_with(Orchestrator::with_github(f.config(f.dir.path(), Trust::Main), SECRET, app));
     let main = git(&f.repo, &["rev-parse", "HEAD"]);
     f.simulator(SECRET).push("main").unwrap();

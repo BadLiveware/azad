@@ -886,3 +886,103 @@ fn list_fails_when_a_file_of_the_workspace_cannot_be_read() {
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("1 of the listed files cannot be read"), "{}", stderr(&output));
 }
+
+/// A fake of GitHub's check runs API that takes every call with the token `token`, and records each as its method,
+/// path and body.
+fn fake_check_runs_api(token: &'static str) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let url = format!("http://{}", listener.local_addr().expect("an address"));
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = calls.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.expect("a connection");
+            let mut reader = std::io::BufReader::new(stream.try_clone().expect("a stream"));
+            let mut request = String::new();
+            reader.read_line(&mut request).expect("a request line");
+            let (mut length, mut authorized) = (0, false);
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).expect("a header");
+                let header = header.trim_end().to_ascii_lowercase();
+                if header.is_empty() {
+                    break;
+                }
+                if let Some(value) = header.strip_prefix("content-length: ") {
+                    length = value.parse().expect("a length");
+                }
+                authorized |= header == format!("authorization: bearer {token}");
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).expect("a body");
+            let line: Vec<&str> = request.split_whitespace().take(2).collect();
+            recorded.lock().expect("the calls").push(format!("{} {}", line.join(" "), String::from_utf8_lossy(&body)));
+            let (status, answer) = match authorized {
+                true => (200, r#"{"id": 9}"#),
+                false => (401, r#"{"message": "Bad credentials"}"#),
+            };
+            let response = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                answer.len()
+            );
+            stream.write_all(response.as_bytes()).expect("an answer");
+        }
+    });
+    (url, calls)
+}
+
+/// In a GHA job, `azad-orchestrator gha` runs the goals that name the job's event, as `serve` does for a webhook: it
+/// fetches the commit, writes a check run for each goal with the job's token, and fails when a goal fails. As in
+/// `serve`, a task without an image never runs on the runner (decision 0036).
+#[test]
+fn in_a_gha_job_the_orchestrator_runs_the_job_s_event_with_the_job_s_token() {
+    let dir = repository();
+    let marker = dir.path().join("ran-on-the-runner");
+    let tasks = format!(
+        "host = task(name = \"host\", cmd = \"touch {}\")\ngoal(\"check\", require = [host], on = [\"push\"])\n",
+        marker.display()
+    );
+    write(dir.path(), "tasks.star", &tasks);
+    let git = |args: &[&str]| {
+        let output = Command::new("git").args(args).current_dir(dir.path()).output().expect("git starts");
+        assert!(output.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    git(&["add", "-A"]);
+    git(&["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "first"]);
+    let sha = git(&["rev-parse", "HEAD"]);
+    let branch = git(&["symbolic-ref", "--short", "HEAD"]);
+    let event = serde_json::json!({
+        "ref": format!("refs/heads/{branch}"), "after": sha, "deleted": false,
+        "repository": { "full_name": "owner/repo", "clone_url": dir.path().display().to_string(), "default_branch": branch },
+    });
+    let event_file = dir.path().join(".store-event.json");
+    fs::write(&event_file, event.to_string()).expect("the event is written");
+    let (api, calls) = fake_check_runs_api("the-job-token");
+    let gha = |name: &str| {
+        Command::new(env!("CARGO_BIN_EXE_azad-orchestrator"))
+            .args(["--store", &dir.path().join(".store").display().to_string(), "gha", "--cache", "none"])
+            .env("GITHUB_EVENT_NAME", name)
+            .env("GITHUB_EVENT_PATH", &event_file)
+            .env("GITHUB_API_URL", &api)
+            .env("GITHUB_TOKEN", "the-job-token")
+            .env_remove("AZAD_GITHUB_TOKEN")
+            .output()
+            .expect("the orchestrator starts")
+    };
+
+    let output = gha("push");
+    assert!(!output.status.success(), "a goal failed: {}", stderr(&output));
+    assert!(stderr(&output).contains("//:check: failure"), "{}", stderr(&output));
+    assert!(!marker.exists(), "the task did not run on the runner");
+    let calls = calls.lock().expect("the calls").clone();
+    assert!(calls[0].starts_with("POST /repos/owner/repo/check-runs "), "{calls:#?}");
+    assert!(calls[0].contains(&sha) && calls[0].contains("//:check"), "{calls:#?}");
+    let last = calls.last().expect("a call");
+    assert!(last.starts_with("PATCH /repos/owner/repo/check-runs/9 "), "{calls:#?}");
+    assert!(last.contains(r#""conclusion":"failure""#) && last.contains("would run with the host's tools"), "{last}");
+
+    let other = gha("workflow_dispatch");
+    assert!(other.status.success(), "an event without a commit to check runs nothing: {}", stderr(&other));
+}

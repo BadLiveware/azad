@@ -8,7 +8,7 @@ use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, bail};
 use azad::EngineConfig;
-use azad::orchestrator::{self, GITHUB_API, GitHubApp, Orchestrator, Simulator};
+use azad::orchestrator::{self, Conclusion, Event, GITHUB_API, GitHub, Orchestrator, Simulator};
 use clap::{Parser, Subcommand};
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:8484";
@@ -16,6 +16,12 @@ const DEFAULT_WEBHOOK_URL: &str = "http://127.0.0.1:8484/webhook";
 const DEFAULT_BRANCH: &str = "main";
 const WEBHOOK_SECRET_ENV: &str = "AZAD_WEBHOOK_SECRET";
 const CHECKED_OUT: &str = "HEAD";
+const GHA_CACHE: &str = "gha";
+const EVENT_NAME_ENV: &str = "GITHUB_EVENT_NAME";
+const EVENT_PATH_ENV: &str = "GITHUB_EVENT_PATH";
+const API_URL_ENV: &str = "GITHUB_API_URL";
+/// The job's token: the Azad action passes it as AZAD_GITHUB_TOKEN; a step can give GITHUB_TOKEN.
+const TOKEN_ENVS: [&str; 2] = ["AZAD_GITHUB_TOKEN", "GITHUB_TOKEN"];
 
 #[derive(Debug, Parser)]
 #[command(name = "azad-orchestrator", version = azad::VERSION, about = "Azad's orchestrator: runs goals for GitHub's events")]
@@ -73,6 +79,17 @@ enum OrchestratorCommand {
         #[arg(long, default_value = DEFAULT_BRANCH)]
         default_branch: String,
     },
+    /// Run the goals that name the event of this GitHub Actions job at the event's trust level, as `serve` runs them
+    /// for a webhook, with a check run for each, through the job's token (decision 0036). Azad's GitHub Action runs it
+    /// with `orchestrate: true`. It fails when a goal fails.
+    Gha {
+        /// The remote cache, as `azad --cache` takes it.
+        #[arg(long, default_value = GHA_CACHE)]
+        cache: String,
+        /// How many actions run at the same time.
+        #[arg(long, default_value_t = orchestrator::DEFAULT_PARALLELISM)]
+        parallelism: usize,
+    },
     /// List the check runs that `serve` wrote, oldest first.
     Checks,
 }
@@ -95,7 +112,7 @@ enum SimulatedEvent {
 
 fn main() -> ExitCode {
     match run(Cli::parse()) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             eprintln!("azad-orchestrator: {error:#}");
             ExitCode::FAILURE
@@ -103,10 +120,10 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> Result<()> {
+fn run(cli: Cli) -> Result<ExitCode> {
     let mut config = EngineConfig::from_environment(cli.store, cli.root)?;
     config.executor = cli.executor;
-    match cli.command {
+    let done = match cli.command {
         OrchestratorCommand::Serve { listen, github_app_id, github_app_key, github_api, site_url, parallelism } => {
             let app = match (github_app_id, github_app_key) {
                 (Some(id), Some(key)) => Some(github_app(&id, &key, &github_api)?),
@@ -146,8 +163,10 @@ fn run(cli: Cli) -> Result<()> {
             eprintln!("azad-orchestrator: pull request {number} from {branch}: {answer}");
             Ok(())
         }
+        OrchestratorCommand::Gha { cache, parallelism } => return gha(config, &cache, parallelism),
         OrchestratorCommand::Checks => checks(&config),
-    }
+    };
+    done.map(|()| ExitCode::SUCCESS)
 }
 
 fn webhook_secret() -> Result<Vec<u8>> {
@@ -157,15 +176,15 @@ fn webhook_secret() -> Result<Vec<u8>> {
     }
 }
 
-fn github_app(id: &str, key: &Path, api: &str) -> Result<GitHubApp> {
+fn github_app(id: &str, key: &Path, api: &str) -> Result<GitHub> {
     let pem = fs::read_to_string(key).with_context(|| format!("reading the GitHub App's key {}", key.display()))?;
-    Ok(GitHubApp::new(id, &pem, api)?)
+    Ok(GitHub::app(id, &pem, api)?)
 }
 
 fn serve(
     config: EngineConfig,
     listen: &str,
-    app: Option<GitHubApp>,
+    app: Option<GitHub>,
     site_url: Option<&str>,
     parallelism: usize,
 ) -> Result<()> {
@@ -186,6 +205,46 @@ fn serve(
     };
     orchestrator.serve(&listener)?;
     Ok(())
+}
+
+fn gha(mut config: EngineConfig, cache: &str, parallelism: usize) -> Result<ExitCode> {
+    let name = required_env(EVENT_NAME_ENV)?;
+    let path = required_env(EVENT_PATH_ENV)?;
+    let payload = fs::read(&path).with_context(|| format!("reading the event of the job, {path}"))?;
+    let Some(event) = Event::from_webhook(&name, &payload).with_context(|| format!("the {name} event in {path}"))?
+    else {
+        eprintln!("azad-orchestrator: the {name} event of this job gives no commit to check");
+        return Ok(ExitCode::SUCCESS);
+    };
+    let token = TOKEN_ENVS
+        .iter()
+        .find_map(|name| std::env::var(name).ok().filter(|token| !token.is_empty()))
+        .with_context(|| format!("set {} to the job's token, which may write checks", TOKEN_ENVS.join(" or ")))?;
+    let api = std::env::var(API_URL_ENV).unwrap_or_else(|_| GITHUB_API.to_owned());
+    let secrets =
+        TOKEN_ENVS.into_iter().chain([azad::remote::SIGNING_KEY_ENV]).chain(azad::remote::gha::SECRET_VARIABLES);
+    config.withheld.extend(secrets.map(str::to_owned));
+    let orchestrator = Orchestrator::with_github(config, &[], GitHub::with_token(&token, &api))
+        .with_cache(cache)
+        .with_parallelism(parallelism);
+    let goals = orchestrator.run_once(&event)?;
+    if goals.is_empty() {
+        eprintln!("azad-orchestrator: no goal names the {name} event");
+    }
+    for (goal, conclusion) in &goals {
+        eprintln!("azad-orchestrator: {goal}: {}", serde_json::to_value(conclusion)?.as_str().unwrap_or_default());
+    }
+    match goals.values().all(|conclusion| *conclusion == Conclusion::Success) {
+        true => Ok(ExitCode::SUCCESS),
+        false => Ok(ExitCode::FAILURE),
+    }
+}
+
+fn required_env(name: &str) -> Result<String> {
+    match std::env::var(name) {
+        Ok(value) if !value.is_empty() => Ok(value),
+        _ => bail!("{name} is not set: `gha` runs in a GitHub Actions job"),
+    }
 }
 
 fn simulator(config: &EngineConfig, server: &str, default_branch: &str) -> Result<Simulator> {

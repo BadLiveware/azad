@@ -11,6 +11,7 @@ mod entry;
 pub mod gha;
 pub mod keys;
 mod pack;
+mod spec;
 mod volumes;
 
 pub use volumes::Kept;
@@ -24,6 +25,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub use backend::RemoteBackend;
 pub use directory::DirectoryProvider;
 pub use keys::{PublicKey, SigningKey, parse_public_keys};
+pub use spec::{SIGNING_KEY_ENV, TRUSTED_KEYS_FILE};
 
 use crate::ir::{ActionResult, Digest, Image};
 use crate::store::{DirectoryState, Store, StoreError};

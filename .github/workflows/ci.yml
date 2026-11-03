@@ -365,6 +365,32 @@ jobs:
           binary: ${{ runner.temp }}/release/azad
           force: "true"
 
+  # This commit's own orchestrator runs the goals that name this event, as it runs them for a webhook: at the event's
+  # trust level, isolated, with a check run for each goal through the job's token (decision 0036). It does not gate a
+  # release yet; it runs next to `//:check`, to show that the orchestrator can run Azad's CI.
+  orchestrator:
+    needs: build-linux
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: binaries-x86_64-linux
+          path: ${{ runner.temp }}/release
+      - run: |
+          tar -C "$RUNNER_TEMP/release" -xzf "$RUNNER_TEMP/release/azad-orchestrator-x86_64-unknown-linux-musl.tar.gz"
+          "$RUNNER_TEMP/release/azad-orchestrator" --version
+      - run: nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost > /dev/null 2>&1 &
+      - uses: ./
+        with:
+          orchestrate: "true"
+          binary: ${{ runner.temp }}/release/azad-orchestrator
+          signing-key: ${{ secrets.AZAD_SIGNING_KEY }}
+
   images:
     needs: [version, build-linux, build-macos, verify, self-build, self-build-again, deny, macos, action]
     if: github.event_name == 'push'

@@ -62,3 +62,7 @@ Decision 0032 adds the client of GitHub's API, as a GitHub App, and gives a tag 
 
 Decision 0035 replaces "oldest first, one at a time": runs, and the goals of a run, run at the same time, and they share one pool of actions.
 A newer commit of a branch or a pull request cancels the runs of its older commits, a goal gets one check run for each commit and trust level, and GitHub's "Re-run" buttons work.
+
+## Amendment, 2026-11-03: Azad's own goals
+
+`//:isolated-check` names `push` and `pull_request`, and decision 0036 runs it through the orchestrator in Azad's CI; the sandbox tests stay on the host.

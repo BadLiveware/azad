@@ -93,7 +93,7 @@ Things that are not done, from earlier work; each one is taken when a use needs 
   A producer does not run again when the cache dropped its content after its entry was checked (decision 0012).
   No limits on what a cache holds, and no OCI registry or object store providers.
 - **GitHub.**
-  The orchestrator works as a GitHub App only; it does not run nested in a GHA job yet, for a repository that cannot install the App.
+  In a GHA job, the orchestrator has no state between jobs, so GHA cancels and runs again, and there is no site (decision 0036).
   A cancel does not stop an action that runs already (decision 0035).
 - **The site.**
   `azad-site` is not in the releases yet: only the development host's `deploy` builds it.
@@ -101,7 +101,7 @@ Things that are not done, from earlier work; each one is taken when a use needs 
   A cached step has no time, because a result does not store how long its action took.
 - **Runs.**
   The executions of a local run live in memory, so a run does not survive a restart of `azad`.
-  Azad's own goals do not name events, because its sandbox tests run on the host.
+  `//:isolated-check` names events, and the orchestrator runs it in Azad's CI; the sandbox tests and the examples run on the host, so they are not in it.
 - **Platforms.**
   The task runner runs on Linux and macOS; isolated runs, the executor and the orchestrator need Linux, and the microVM sandbox needs x86_64.
   Windows is not supported.
@@ -123,3 +123,4 @@ Things that are not done, from earlier work; each one is taken when a use needs 
 | Real GitHub | 2026-11-03 | The orchestrator as a GitHub App on a private repository, through the development host: check runs, fetches with the App's token, and tags on the default branch as `main` |
 | Check runs and a site | 2026-11-03 | A check run shows a goal's steps, metrics and output; a record of each run; `azad-site` in Leptos, with live logs, on the development host |
 | CI for each day | 2026-11-03 | Runs and goals at the same time with a shared pool of actions, cancels of outdated runs, one check run for each goal and commit, and re-runs from GitHub |
+| The orchestrator in GHA | 2026-11-03 | `azad-orchestrator gha` and the action's `orchestrate`: Azad's own CI runs `//:isolated-check` through the orchestrator |

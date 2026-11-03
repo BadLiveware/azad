@@ -102,3 +102,13 @@ examples = task(
 )
 
 goal("check", require = [fmt, clippy, test, sandbox_tests], doc = "Check a change; CI runs it, and the examples next to it")
+
+# The orchestrator runs only isolated tasks, because an event runs code that someone else wrote, so this goal leaves out
+# the sandbox tests and the examples. In CI, this commit's own orchestrator runs it for each push and pull request, as it
+# would for a webhook, next to `//:check` (decision 0036).
+goal(
+    "isolated-check",
+    require = [fmt, clippy, test],
+    on = ["push", "pull_request"],
+    doc = "The part of check that runs isolated, which the orchestrator runs for each push and pull request",
+)

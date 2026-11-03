@@ -24,7 +24,7 @@ mod simulate;
 
 pub use checks::{CheckOutput, CheckRun, CheckRuns, CheckStatus, Conclusion, FakeGitHub};
 pub use event::{Event, EventKind, Repository, Rerun};
-pub use github::{GITHUB_API, GitHubApp, GitHubError};
+pub use github::{GITHUB_API, GitHub, GitHubError};
 pub use http::Response;
 pub use signature::{SIGNATURE_HEADER, sign};
 pub use simulate::{SimulateError, Simulator};
@@ -40,6 +40,7 @@ use std::time::{Duration, Instant};
 
 use crate::engine::{Engine, EngineConfig, Pool};
 use crate::ir::Kind;
+use crate::remote::RemoteConfig;
 
 use crate::trust::Trust;
 
@@ -80,11 +81,13 @@ pub struct Orchestrator {
     runs: runs::Runs,
     checks: Box<dyn CheckRuns>,
     /// The App that writes check runs on GitHub and fetches its repositories; none for the fake GitHub.
-    github: Option<Arc<GitHubApp>>,
+    github: Option<Arc<GitHub>>,
     /// Where the site shows the runs, such as `http://127.0.0.1:8485`, so that check runs link to their run's page.
     site: Option<String>,
     parallelism: usize,
     pool: Pool,
+    /// The remote cache of each run, as `azad --cache` names it, such as `gha`.
+    cache: Option<String>,
     /// The runs that run now.
     active: Mutex<BTreeMap<u64, Arc<Active>>>,
     new_events: (Mutex<bool>, Condvar),
@@ -145,13 +148,14 @@ impl Orchestrator {
             secret: secret.to_vec(),
             parallelism: DEFAULT_PARALLELISM,
             pool: Pool::new(DEFAULT_PARALLELISM),
+            cache: None,
             active: Mutex::default(),
             new_events: (Mutex::new(false), Condvar::new()),
         }
     }
 
     /// As `new`, with check runs on GitHub through `app`, which also fetches the repositories of its installations.
-    pub fn with_github(engine: EngineConfig, secret: &[u8], app: GitHubApp) -> Self {
+    pub fn with_github(engine: EngineConfig, secret: &[u8], app: GitHub) -> Self {
         let app = Arc::new(app);
         Orchestrator { checks: Box::new(app.clone()), github: Some(app), ..Orchestrator::new(engine, secret) }
     }
@@ -164,6 +168,24 @@ impl Orchestrator {
     /// At most `parallelism` actions run at the same time, for all runs together.
     pub fn with_parallelism(self, parallelism: usize) -> Self {
         Orchestrator { parallelism, pool: Pool::new(parallelism), ..self }
+    }
+
+    /// Each run reads and writes the remote cache that `spec` names, as `azad --cache` takes it.
+    pub fn with_cache(self, spec: &str) -> Self {
+        Orchestrator { cache: Some(spec.to_owned()), ..self }
+    }
+
+    /// Runs one event now, as in a GHA job that the event started (decision 0036), and says how each of its goals
+    /// ended. Its check runs show the same; the run's record stays in the state, as a served run's does.
+    pub fn run_once(&self, event: &Event) -> io::Result<BTreeMap<String, Conclusion>> {
+        std::fs::create_dir_all(&self.state)?;
+        let id = self.runs.add(event)?;
+        self.process(id, event, &Active::default());
+        let run = record::Run::read(&self.runs.run_dir(id))?;
+        if let Some(failure) = run.failure {
+            return Err(io::Error::other(failure));
+        }
+        Ok(run.goals.into_iter().filter_map(|goal| Some((goal.name, goal.conclusion?))).collect())
     }
 
     /// Takes deliveries on `listener`, and runs what they ask for, until the listener fails. Runs that were not done
@@ -434,7 +456,7 @@ impl Orchestrator {
         append(&mut recorder, &record::RecordEvent::RunStarted { trust: config.trust });
         let recorder = Mutex::new(recorder);
         let trust = config.trust;
-        let engine = Engine::new(config).map_err(|e| e.to_string())?.with_pool(self.pool.clone());
+        let engine = self.engine_for(config)?.with_pool(self.pool.clone());
         let checks = self.check_runs(id, event, &engine, trust)?;
         let page = self.run_page(id);
         thread::scope(|scope| {
@@ -454,6 +476,19 @@ impl Orchestrator {
             }
             Ok(())
         })
+    }
+
+    /// The engine of a run, with the remote cache of the orchestrator, when it has one.
+    fn engine_for(&self, config: EngineConfig) -> Result<Engine, String> {
+        let remote = match &self.cache {
+            Some(spec) => RemoteConfig::from_spec(spec, &config.root).map_err(|e| e.to_string())?,
+            None => None,
+        };
+        let engine = match remote {
+            Some(remote) => Engine::with_remote(config, remote),
+            None => Engine::new(config),
+        };
+        engine.map_err(|e| e.to_string())
     }
 
     /// Completes a goal's check run, unless it completed already.
