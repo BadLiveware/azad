@@ -17,6 +17,8 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "BSL-1.0",
+    # A public-domain dedication; Leptos's base16 is under it only.
+    "CC0-1.0",
     "CDLA-Permissive-2.0",
     "ISC",
     "Unicode-3.0",

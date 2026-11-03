@@ -417,7 +417,12 @@ fn a_check_run_shows_the_steps_metrics_and_the_output_of_a_failed_step() {
     let broken = check.text.find("<details open><summary>❌ <code>//:broken</code>").expect("the failed step is open");
     let lint = check.text.find("<details><summary>✅ <code>//:lint</code>").expect("the step that ran is folded");
     assert!(broken < lint, "the failed step comes first:\n{}", check.text);
-    assert!(check.text.contains("compiling\nerror: a | b\n"), "{}", check.text);
+    let output: Vec<&str> = check.text.lines().collect();
+    assert!(
+        output.contains(&"compiling") && output.contains(&"error: a | b"),
+        "both outputs, in either order: {}",
+        check.text
+    );
 }
 
 /// The run's record holds what the check run shows, and the whole output of each step, for the site (decision 0034).

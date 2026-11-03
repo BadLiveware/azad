@@ -41,14 +41,15 @@ impl Checkout {
     }
 }
 
-/// What a fetch needs: the repository, the ref of the event and its commit, the default branch, and an HTTP header
-/// that authorizes the fetch, such as a GitHub App's token for a private repository.
+/// What a fetch needs: the repository, the ref of the event and its commit, the default branch when the run needs to
+/// know what it holds, and an HTTP header that authorizes the fetch, such as a GitHub App's token for a private
+/// repository.
 #[derive(Debug)]
 pub(super) struct Fetch<'a> {
     pub(super) url: &'a str,
     pub(super) git_ref: &'a str,
     pub(super) sha: &'a str,
-    pub(super) default_branch: &'a str,
+    pub(super) default_branch: Option<&'a str>,
     pub(super) header: Option<String>,
 }
 
@@ -71,9 +72,11 @@ pub(super) fn check_out(state: &Path, fetch: &Fetch<'_>, dir: &Path) -> Result<C
         git(&mirror, &["init", "--quiet", "--bare"])?;
     }
     let fetched = format!("+{git_ref}:{FETCHED_REF}");
-    let default = format!("+{BRANCH_PREFIX}{}:{DEFAULT_BRANCH_REF}", fetch.default_branch);
-    let args = ["fetch", "--quiet", "--no-tags", "--force", "--prune", url, &fetched, &default, TAGS_REFSPEC];
+    let args = ["fetch", "--quiet", "--no-tags", "--force", "--prune", url, &fetched, TAGS_REFSPEC];
     authorized_git(&mirror, &args, fetch.header.as_deref())?;
+    if let Some(branch) = fetch.default_branch {
+        fetch_default_branch(&mirror, url, branch, fetch.header.as_deref());
+    }
     git(&mirror, &["commit-graph", "write", "--reachable", "--split"])?;
     git(&mirror, &["cat-file", "-e", &format!("{sha}^{{commit}}")])
         .map_err(|_| error("fetch", format!("{url} {git_ref} does not hold the commit {sha}")))?;
@@ -81,6 +84,16 @@ pub(super) fn check_out(state: &Path, fetch: &Fetch<'_>, dir: &Path) -> Result<C
     let target = dir.display().to_string();
     git(&mirror, &["worktree", "add", "--quiet", "--detach", &target, sha])?;
     Ok(Checkout { mirror, dir: dir.to_path_buf() })
+}
+
+/// Fetches the default branch to `DEFAULT_BRANCH_REF`; when it cannot be fetched, the ref is gone, so nothing is proved
+/// to be on it.
+fn fetch_default_branch(mirror: &Path, url: &str, branch: &str, header: Option<&str>) {
+    let default = format!("+{BRANCH_PREFIX}{branch}:{DEFAULT_BRANCH_REF}");
+    let args = ["fetch", "--quiet", "--no-tags", "--force", url, &default];
+    if authorized_git(mirror, &args, header).is_err() {
+        git(mirror, &["update-ref", "-d", DEFAULT_BRANCH_REF]).ok();
+    }
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
@@ -152,7 +165,7 @@ mod tests {
                      env = {\"head\": git.commit().id, \"tags\": str(git.tags())})\n";
 
         let dir = state.path().join("run");
-        let fetch = Fetch { url: &url, git_ref: "refs/heads/main", sha: &event, default_branch: "main", header: None };
+        let fetch = Fetch { url: &url, git_ref: "refs/heads/main", sha: &event, default_branch: None, header: None };
         let checkout = check_out(state.path(), &fetch, &dir).expect("a checkout");
         std::fs::write(checkout.path().join("tasks.star"), tasks).expect("a tasks.star");
         let package = evaluate(checkout.path(), "", "linux/amd64").expect("the package");
@@ -195,12 +208,37 @@ mod tests {
             url: &url,
             git_ref: "refs/heads/main",
             sha: &sha,
-            default_branch: "main",
+            default_branch: None,
             header: Some(header.clone()),
         };
         let error = check_out(state.path(), &fetch, &state.path().join("run")).expect_err("the server refuses");
         let lines = seen.join().expect("the server saw a request");
         assert!(lines.iter().any(|line| line.eq_ignore_ascii_case(&header)), "{lines:?}");
         assert!(error.to_string().contains("terminal prompts disabled"), "git asked someone for a password: {error}");
+    }
+
+    #[test]
+    fn a_default_branch_that_cannot_be_fetched_proves_nothing_and_fails_no_fetch() {
+        let origin = tempfile::TempDir::new().expect("a directory");
+        let state = tempfile::TempDir::new().expect("a directory");
+        let repo = origin.path();
+        run(repo, &["init", "--quiet", "--initial-branch", "trunk"]);
+        run(repo, &["commit", "--quiet", "--allow-empty", "-m", "first"]);
+        run(repo, &["tag", "v1"]);
+        let sha = run(repo, &["rev-parse", "HEAD"]);
+        let url = repo.display().to_string();
+        let fetch = |default: &'static str| Fetch {
+            url: &url,
+            git_ref: "refs/tags/v1",
+            sha: &sha,
+            default_branch: Some(default),
+            header: None,
+        };
+
+        let checkout = check_out(state.path(), &fetch("main"), &state.path().join("a")).expect("a checkout");
+        assert!(!checkout.is_on_default_branch(&sha), "a branch that does not exist holds nothing");
+        drop(checkout);
+        let checkout = check_out(state.path(), &fetch("trunk"), &state.path().join("b")).expect("a checkout");
+        assert!(checkout.is_on_default_branch(&sha));
     }
 }

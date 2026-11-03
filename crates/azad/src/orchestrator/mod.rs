@@ -226,7 +226,7 @@ impl Orchestrator {
             url: &event.repository.clone_url,
             git_ref: &event.git_ref,
             sha: &event.head_sha,
-            default_branch: &event.repository.default_branch,
+            default_branch: event.git_ref.starts_with(TAG_PREFIX).then_some(event.repository.default_branch.as_str()),
             header,
         };
         let checkout = git::check_out(&self.state, &fetch, &dir).map_err(|e| e.to_string())?;
