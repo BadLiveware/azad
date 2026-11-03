@@ -39,6 +39,8 @@ The orchestrator of decision 0020 against GitHub itself.
 - Or the orchestrator nested in a GHA job, for repositories that cannot install the App.
 - The trust level of a tag comes from proof that its commit is on the default branch.
 
+The orchestrator runs in the development host (`dev/host/`), so that code from events never runs on a developer's machine.
+
 Done when: a pull request on a real repository gets Azad's check runs, a push to the default branch fills the cache, and a later pull request gets hits from it but never writes to the default branch's cache.
 
 ### 2. Gaps that the monorepo found
