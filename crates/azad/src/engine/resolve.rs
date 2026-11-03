@@ -2,7 +2,7 @@
 //! pulled, and outputs of other actions stay references. An image root also gives the base of the action's environment
 //! (decision 0016).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -69,7 +69,7 @@ impl Resolver<'_> {
                 .iter()
                 .map(|(path, source)| self.source(source, &spec.platform, observe).map(|s| (path.clone(), s)))
                 .collect::<Result<_, _>>()?;
-            let (root, env) = self.root(&spec.root, &spec.platform, &spec.env, observe)?;
+            let (root, env) = self.root(&spec.root, &spec.platform, &spec.env, &spec.secrets, observe)?;
             let resolved = Spec {
                 kind: spec.kind,
                 root,
@@ -89,17 +89,18 @@ impl Resolver<'_> {
     }
 
     /// The root of an action, and its environment: an image's `Env` with the action's variables in place of the
-    /// image's.
+    /// image's. The build of an image from a Dockerfile gets the action's secrets, as a local run's build does.
     fn root(
         &mut self,
         source: &SourceSpec,
         platform: &str,
         env: &BTreeMap<String, String>,
+        secrets: &BTreeSet<String>,
         observe: &mut dyn FnMut(Event),
     ) -> Result<(Source, BTreeMap<String, String>), EngineError> {
         let (image, image_env) = match source {
             SourceSpec::Image { reference, env } => (self.image(reference, platform, observe)?, env),
-            SourceSpec::Dockerfile { env, .. } => (self.built_image(source, platform, observe)?, env),
+            SourceSpec::Dockerfile { env, .. } => (self.built_image(source, platform, secrets, observe)?, env),
             _ => return Ok((self.source(source, platform, observe)?, env.clone())),
         };
         let mut on_top = image_env.clone();
@@ -163,7 +164,7 @@ impl Resolver<'_> {
                     .ingest(&directory, &Selection::Paths(files))
                     .map_err(EngineError::store(source.to_string()))?
             }
-            SourceSpec::Dockerfile { .. } => self.built_image(source, platform, observe)?.tree,
+            SourceSpec::Dockerfile { .. } => self.built_image(source, platform, &BTreeSet::new(), observe)?.tree,
         };
         self.stored.insert(key, digest);
         Ok(Source::Tree(digest))
@@ -191,6 +192,7 @@ impl Resolver<'_> {
         &mut self,
         source: &SourceSpec,
         platform: &str,
+        secrets: &BTreeSet<String>,
         observe: &mut dyn FnMut(Event),
     ) -> Result<Image, EngineError> {
         let SourceSpec::Dockerfile { file, context, target, args, contexts, .. } = source else {
@@ -214,8 +216,9 @@ impl Resolver<'_> {
             ))
         })?;
         let dockerfile = Dockerfile { file, context, target, args, contexts };
+        let secret_values = self.secret_values(file, secrets)?;
         let timer = self.timings.start(format!("build the image of //{file}"));
-        let id = build_image(&runtime, self.root, &dockerfile, &BTreeMap::new())
+        let id = build_image(&runtime, self.root, &dockerfile, &secret_values)
             .map_err(|e| EngineError::Config(e.to_string()))?;
         let content = image_content(&runtime, &id).map_err(|e| EngineError::Config(e.to_string()))?;
         timer.stop();
@@ -231,6 +234,21 @@ impl Resolver<'_> {
         };
         self.images.insert(built, image.clone());
         Ok(image)
+    }
+
+    /// The values of `secrets` in Azad's environment, for the build of `//file`; never Azad's own secrets.
+    fn secret_values(&self, file: &str, secrets: &BTreeSet<String>) -> Result<BTreeMap<String, String>, EngineError> {
+        let mut values = BTreeMap::new();
+        for name in secrets {
+            if self.config.withheld.contains(name) {
+                return Err(EngineError::Config(format!("//{file}: {name} is a secret of Azad, which no build gets")));
+            }
+            let value = std::env::var(name).map_err(|_| {
+                EngineError::Config(format!("//{file}: its build needs the secret {name}, which is not set"))
+            })?;
+            values.insert(name.clone(), value);
+        }
+        Ok(values)
     }
 
     /// Stores the file system and the `Env` of an image that the runtime built, by the reference of its ID.

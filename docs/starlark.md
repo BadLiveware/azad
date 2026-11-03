@@ -433,7 +433,8 @@ The `Env` of the image is the base environment of an action that has the image a
 An image from a Dockerfile is built by the host's container runtime, Docker or Podman, with every feature that
 it has (decision 0024). A task that runs in its image locally runs in the runtime; an isolated run stores the
 image's file system, once for each content, and runs the task in Azad's sandbox. A run of a pull request does not
-build one, because a build runs the Dockerfile's steps with the host's runtime.
+build one, because a build runs the Dockerfile's steps with the host's runtime. Either build gets the `secrets`
+of the task that runs in the image, for `RUN --mount=type=secret,id=<name>`.
 
 Choose a `target` that holds the toolchain alone, such as a `base` stage with the language and its package
 manager. A stage that also installs the project's dependencies or builds it does that work in every new build,

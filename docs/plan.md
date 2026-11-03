@@ -54,7 +54,6 @@ Done when: a pull request on a real repository gets Azad's check runs, a push to
 
 Smaller items; each one is done when the monorepo no longer needs its workaround.
 
-- Secrets for Dockerfile builds in isolated runs (`RUN --mount=type=secret`), at the trust levels that may have them.
 - No Dockerfile build check when the Dockerfile and its contexts did not change: today each isolated run asks the runtime, which costs 2 to 3 seconds for each image.
 - A `config.star` that extends a value of its parent, not only replaces it.
 - Modules that give a task its own list of dependencies, not only the package's.

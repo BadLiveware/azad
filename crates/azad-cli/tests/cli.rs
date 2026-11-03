@@ -626,6 +626,17 @@ secret = task(name = "secret", cmd = "mkdir -p out && echo $THE_SECRET > out/sec
     );
     write(root, "counter", "1\n");
     write(root, "extra/greeting.txt", "hello\n");
+    write(
+        root,
+        "secret/Dockerfile",
+        &format!("FROM {BUSYBOX}\nRUN --mount=type=secret,id=BUILD_TOKEN cat /run/secrets/BUILD_TOKEN > /token\n"),
+    );
+    write(
+        root,
+        "secret/tasks.star",
+        "token = image(dockerfile = \"//secret/Dockerfile\")\n\
+         task(name = \"token\", cmd = \"echo token=$(cat /token)\", image = token, secrets = [\"BUILD_TOKEN\"])\n",
+    );
     dir
 }
 
@@ -819,4 +830,28 @@ fn an_isolated_run_builds_an_image_from_a_dockerfile_and_runs_in_its_sandbox() {
     assert!(output.contains("stored the image of //tools/Dockerfile"), "{output}");
     let second = stderr(&run());
     assert!(second.contains("file=built env=yes context=hello") && !second.contains("stored the image"), "{second}");
+}
+
+/// An isolated run's build of a Dockerfile gets the secrets of the task that runs in the image, as a local run's
+/// build does; without the variable, the run says which secret it needs. (The test's Dockerfile writes the secret into
+/// the image only to show that the build got it.)
+#[test]
+fn an_isolated_build_of_a_dockerfile_gets_the_secrets_of_its_task() {
+    if !has_container_runtime() {
+        return;
+    }
+    let workspace = container_workspace();
+    let run = |env: &[(&str, &str)]| {
+        azad_env(workspace.path(), &["--isolated", "run", "//secret:token", "--output", "plain"], env)
+    };
+    let missing = run(&[]);
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("its build needs the secret BUILD_TOKEN, which is not set"),
+        "{}",
+        stderr(&missing)
+    );
+    let given = run(&[("BUILD_TOKEN", "s3cret")]);
+    assert!(given.status.success(), "{}", stderr(&given));
+    assert!(stderr(&given).contains("token=s3cret"), "{}", stderr(&given));
 }

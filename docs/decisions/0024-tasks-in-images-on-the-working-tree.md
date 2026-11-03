@@ -82,3 +82,8 @@ Dockerfiles that `docker buildx bake` builds often read other directories as Bui
 
 - `image(dockerfile = ..., contexts = {"<name>": "//<path>"})` gives them, by paths from the workspace root; the runtime gets each as `--build-context <name>=<path>`, in a local run and in an isolated run.
 - A container image from a Dockerfile encodes its contexts only when it has some, so the digests of other actions do not change.
+
+## Amendment, 2026-11-03
+
+An isolated run's build of a Dockerfile gets the secrets of the task whose image it is, as a local run's build does, with `RUN --mount=type=secret,id=<name>`.
+The values come from Azad's environment; Azad's own secrets are never given, and a run of a pull request builds no image at all.
