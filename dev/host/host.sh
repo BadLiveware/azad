@@ -15,6 +15,11 @@ disk_size=${AZAD_HOST_DISK:-40G}
 readonly IMAGE_NAME=debian-13-generic-amd64-20261026-2643.qcow2
 readonly IMAGE_URL=https://cloud.debian.org/images/cloud/trixie/20261026-2643/$IMAGE_NAME
 readonly IMAGE_SHA512=5bd891c6e62d01639f52a5587b72a4607421e445732214be787dba6043cf9797a6ff90bed982aada6a6c7e619f1f956d961c4fad76757171abd607920aac098a
+# The client that takes GitHub's deliveries from a relay channel, such as one of smee.io (decision 0032).
+readonly RELAY_VERSION=0.32.1
+readonly RELAY_ARCHIVE=gosmee_${RELAY_VERSION}_linux_x86_64.tar.gz
+readonly RELAY_URL=https://github.com/chmouel/gosmee/releases/download/v$RELAY_VERSION/$RELAY_ARCHIVE
+readonly RELAY_SHA256=69e5d2593022f0cd30cc38304863b94a39e5cf42631763b9e7969e563be4e389
 readonly SSH_PORT=2222
 readonly SEED_PORT=8642
 readonly USER_NAME=azad
@@ -160,13 +165,26 @@ reset() {
     echo "host.sh: the next up starts from the image"
 }
 
-# The binaries of the working tree, built static as a release builds them, in the VM's /opt/azad/bin.
+relay() {
+    [ -x "$state/share/relay/gosmee" ] && return
+    mkdir -p "$state/share/relay"
+    curl -fsSL -o "$state/$RELAY_ARCHIVE" "$RELAY_URL"
+    echo "$RELAY_SHA256  $state/$RELAY_ARCHIVE" | sha256sum --check --quiet
+    tar -xzf "$state/$RELAY_ARCHIVE" -C "$state/share/relay" gosmee
+    rm "$state/$RELAY_ARCHIVE"
+}
+
+# The binaries of the working tree, built static as a release builds them, in the VM's /opt/azad/bin, and the relay's
+# client in /opt/azad/relay.
 deploy() {
     local version
     version="dev-$(git -C "$repo" rev-parse --short HEAD)"
     docker build --target dist --build-arg "AZAD_VERSION=$version" --output "type=local,dest=$state/share/bin" "$repo"
+    relay
+    rm -rf "$state/share/units" && cp -r "$here/units" "$state/share/units"
     if running; then
-        host_ssh sudo systemctl try-restart azad-orchestrator
+        host_ssh 'sudo cp /opt/azad/units/*.service /etc/systemd/system/ && sudo systemctl daemon-reload &&
+            sudo systemctl try-restart azad-orchestrator azad-relay'
     fi
     echo "host.sh: deployed $version"
 }
@@ -177,7 +195,7 @@ status() {
         return
     fi
     echo "host.sh: the host runs (pid $(cat "$state/vm.pid")), state in $state"
-    host_ssh 'uptime; ls /opt/azad/bin 2>/dev/null; systemctl is-active azad-orchestrator || true'
+    host_ssh 'uptime; ls /opt/azad/bin 2>/dev/null; systemctl is-active azad-orchestrator azad-relay || true'
 }
 
 case "${1:-}" in

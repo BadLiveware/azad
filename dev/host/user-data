@@ -1,6 +1,6 @@
 #cloud-config
 # The first boot of the development host: a user for SSH, the programs that Azad's services run, and the binaries
-# that `dev/host/host.sh deploy` puts in a read-only share. host.sh replaces @SSH_KEY@ with its own public key.
+# that `dev/host/host.sh deploy` puts in a read-only share, with the units of the services. host.sh replaces @SSH_KEY@ with its own public key.
 hostname: azad-host
 ssh_pwauth: false
 users:
@@ -19,20 +19,3 @@ packages:
   - slirp4netns
 mounts:
   - [azad, /opt/azad, 9p, "trans=virtio,version=9p2000.L,ro,nofail", "0", "0"]
-write_files:
-  - path: /etc/systemd/system/azad-orchestrator.service
-    content: |
-      [Unit]
-      Description=Azad's orchestrator
-      After=network-online.target opt-azad.mount
-      Wants=network-online.target
-
-      [Service]
-      User=azad
-      EnvironmentFile=/etc/azad/orchestrator.env
-      ExecStart=/opt/azad/bin/azad-orchestrator --store /var/lib/azad serve
-      StateDirectory=azad
-      Restart=on-failure
-
-      [Install]
-      WantedBy=multi-user.target

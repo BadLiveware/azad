@@ -1,0 +1,14 @@
+[Unit]
+Description=Azad's orchestrator
+After=network-online.target opt-azad.mount
+Wants=network-online.target
+
+[Service]
+User=azad
+EnvironmentFile=/etc/azad/orchestrator.env
+ExecStart=/opt/azad/bin/azad-orchestrator --store /var/lib/azad serve --github-app-id ${AZAD_GITHUB_APP_ID} --github-app-key /etc/azad/app.pem
+StateDirectory=azad
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

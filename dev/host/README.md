@@ -29,5 +29,17 @@ Use it to work on the orchestrator and the executor with real events, so that co
 It needs `qemu-system-x86_64` and `qemu-img`, `slirp4netns`, `nft`, `socat`, `python3` and Docker, and `/dev/kvm` with nested virtualization for the microVM sandbox in the VM.
 `AZAD_HOST_CPUS` (8), `AZAD_HOST_MEMORY` (16G) and `AZAD_HOST_DISK` (40G) size the VM.
 
-The orchestrator's unit, `azad-orchestrator.service`, reads its secrets from `/etc/azad/orchestrator.env` in the VM, and keeps its store in `/var/lib/azad`.
-It is not enabled until it has its secrets.
+## Services
+
+`deploy` installs the units in `dev/host/units/` and restarts the services that run.
+Each reads its settings from a file in `/etc/azad/` in the VM, which you write there yourself, so that secrets never pass through the repository or the share:
+
+| Service | File | Settings |
+|---|---|---|
+| `azad-orchestrator` | `/etc/azad/orchestrator.env` (root, 600) | `AZAD_WEBHOOK_SECRET`, the GitHub App's webhook secret; `AZAD_GITHUB_APP_ID`, its ID |
+| | `/etc/azad/app.pem` (root:azad, 640) | The GitHub App's private key |
+| `azad-relay` | `/etc/azad/relay.env` | `AZAD_RELAY_URL`, the relay channel that is the App's webhook URL, such as one of smee.io |
+
+The orchestrator keeps its store in `/var/lib/azad`.
+Start the services with `dev/host/host.sh ssh sudo systemctl enable --now azad-orchestrator azad-relay`, and read their logs with `journalctl -u`.
+A relay's channel can be read by anyone who has its URL, so use one only for a test repository (decision 0032).

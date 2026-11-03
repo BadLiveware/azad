@@ -1,0 +1,13 @@
+[Unit]
+Description=GitHub's deliveries from a relay channel to Azad's orchestrator
+After=network-online.target opt-azad.mount azad-orchestrator.service
+Wants=network-online.target
+
+[Service]
+User=azad
+EnvironmentFile=/etc/azad/relay.env
+ExecStart=/opt/azad/relay/gosmee client ${AZAD_RELAY_URL} http://127.0.0.1:8484/webhook
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
