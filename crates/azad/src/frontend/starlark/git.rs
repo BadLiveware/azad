@@ -19,9 +19,9 @@ use starlark::values::dict::AllocDict;
 use starlark::values::{NoSerialize, StarlarkValue, starlark_value};
 use starlark::{StarlarkPagablePanic, starlark_module, starlark_simple_value};
 
+use crate::frontend::NoteLevel;
 use crate::frontend::starlark::builtins::collector;
 use crate::frontend::starlark::values::Collector;
-use crate::frontend::{Note, NoteLevel};
 use crate::history::{CommitFacts, LocalRepository, Lookup, Source};
 
 const HEAD: &str = "HEAD";
@@ -70,27 +70,16 @@ fn lookup(collector: &Collector) -> anyhow::Result<Lookup> {
     Ok(Lookup { local, fallback: collector.history.clone() })
 }
 
-/// Adds a note to the package, once.
-fn note(collector: &Collector, level: NoteLevel, text: String) {
-    let mut defined = collector.defined.borrow_mut();
-    let note = Note { level, text };
-    if !defined.notes.contains(&note) {
-        defined.notes.push(note);
-    }
-}
-
 fn count(this: &CommitValue, eval: &Evaluator<'_, '_, '_>) -> anyhow::Result<u64> {
     let collector = collector(eval, "commit.count")?;
     let (count, source) = lookup(collector)?.count(&this.id)?;
     let id = short(&this.id);
     match source {
-        Source::Local => note(
-            collector,
+        Source::Local => collector.note(
             NoteLevel::Diagnostic,
             format!("git: the commit count of {id} is {count}, from the local repository"),
         ),
-        Source::Fallback(name) => note(
-            collector,
+        Source::Fallback(name) => collector.note(
             NoteLevel::Normal,
             format!("git: the commit count of {id} ({count}) came from {name}, because this clone is shallow"),
         ),
@@ -103,8 +92,7 @@ fn first_parents(this: &CommitValue, limit: usize, eval: &Evaluator<'_, '_, '_>)
     let chain = lookup(collector)?.first_parents(&this.id, limit)?;
     if let Some((added, name)) = &chain.borrowed {
         let local = chain.commits.len() - added;
-        note(
-            collector,
+        collector.note(
             NoteLevel::Normal,
             format!(
                 "git: {added} of the first parents of {} came from {name}, because this clone ends after {local}",
@@ -184,7 +172,7 @@ fn commit_methods(builder: &mut MethodsBuilder) {
 
 /// Records that evaluation resolved `name` to `id`.
 fn record(collector: &Collector, name: String, id: &str) {
-    note(collector, NoteLevel::Diagnostic, format!("git: {name} named {id}"));
+    collector.note(NoteLevel::Diagnostic, format!("git: {name} named {id}"));
     collector.defined.borrow_mut().git_refs.insert(name, id.to_owned());
 }
 

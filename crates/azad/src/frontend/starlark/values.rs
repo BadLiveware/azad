@@ -19,7 +19,7 @@ use starlark::values::{
 };
 use starlark::{StarlarkPagablePanic, starlark_complex_value, starlark_module, starlark_simple_value};
 
-use crate::frontend::{Package, SourceSpec};
+use crate::frontend::{Note, NoteLevel, Package, SourceSpec};
 
 /// A source that an action can mount: files of the package, an image, or an output of another action.
 #[derive(Debug, Clone, PartialEq, Eq, ProvidesStaticType, NoSerialize, Allocative, StarlarkPagablePanic)]
@@ -105,6 +105,17 @@ pub(crate) struct Collector {
     pub(crate) history: Option<std::sync::Arc<dyn crate::history::History>>,
     /// Whether the file called `package()`, which it may do once (decision 0028).
     pub(crate) declared_package: std::cell::Cell<bool>,
+}
+
+impl Collector {
+    /// Adds a note to the package, once (decision 0022).
+    pub(crate) fn note(&self, level: NoteLevel, text: String) {
+        let mut defined = self.defined.borrow_mut();
+        let note = Note { level, text };
+        if !defined.notes.contains(&note) {
+            defined.notes.push(note);
+        }
+    }
 }
 
 /// The type of a module parameter (decision 0014). Callers that have only text, such as GHA `with:` inputs, can give

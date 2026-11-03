@@ -392,6 +392,7 @@ pub fn expand_calls(
         package.goals.extend(expanded.goals);
         package.declared_at.extend(expanded.declared_at);
         package.git_refs.extend(expanded.git_refs);
+        package.read_files.extend(expanded.read_files);
         package.tags.extend(expanded.tags);
         package
             .notes

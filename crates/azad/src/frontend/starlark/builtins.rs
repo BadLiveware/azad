@@ -15,9 +15,11 @@ use starlark::values::list::{ListRef, UnpackList};
 use starlark::values::none::NoneOr;
 use starlark::values::{UnpackValue, Value, ValueLike};
 
+use crate::frontend::starlark::decode::{toml_functions, xml_functions, yaml_functions};
 use crate::frontend::starlark::git::git_functions;
 use crate::frontend::starlark::semver::semver_functions;
 use crate::frontend::starlark::values::{ActionValue, Collector, ModuleDef, ModuleSchema, Returns, SourceValue};
+use crate::frontend::starlark::workspace;
 use crate::frontend::{
     Declarations, Dependencies, FileSelection, FileSet, GOAL_EVENTS, LocalRun, SourceSpec, Task, dependency_edge,
     label, parse_label, split_dependency, split_workspace_pattern,
@@ -255,10 +257,31 @@ fn declare(
     Ok(ActionValue { label: action_label, outputs: args.outputs })
 }
 
-/// The namespaces of values that are not actions: `semver` and `git` (decision 0021).
+/// The namespaces of values that are not actions: `semver` and `git` (decision 0021), and the decoders of the text
+/// of files (decision 0031).
 pub(crate) fn namespaces(builder: &mut GlobalsBuilder) {
     builder.namespace("semver", semver_functions);
     builder.namespace("git", git_functions);
+    builder.namespace("toml", toml_functions);
+    builder.namespace("yaml", yaml_functions);
+    builder.namespace("xml", xml_functions);
+}
+
+/// The paths that `files()` selects: relative to the package for patterns of the package, or `//` paths for patterns
+/// of the workspace (decision 0031); one call takes one kind.
+fn listed_files(collector: &Collector, include: &[String], exclude: &[String]) -> anyhow::Result<Vec<String>> {
+    let of_workspace = |pattern: &String| pattern.starts_with(WORKSPACE_PREFIX);
+    let all = include.iter().chain(exclude);
+    match (all.clone().all(of_workspace), all.clone().any(of_workspace)) {
+        (true, _) => workspace::list(&collector.root, include, exclude),
+        (false, false) => {
+            let listed = Selection::globs(include, exclude)?.list(&collector.root.join(&collector.dir))?;
+            Ok(listed.into_iter().map(|path| path.to_string_lossy().into_owned()).collect())
+        }
+        (false, true) => {
+            anyhow::bail!("files(): the patterns of one call are all of the package, or all of the workspace (//)")
+        }
+    }
 }
 
 #[starlark_module]
@@ -580,22 +603,100 @@ pub(crate) fn azad_globals(builder: &mut GlobalsBuilder) {
         Ok(SourceValue { spec })
     }
 
-    /// The paths of the files that `glob()` with the same patterns selects, relative to the package, sorted.
+    /// The paths of the files that patterns select, sorted: the files of the package that `glob()` with the same
+    /// patterns selects, relative to the package; or, for patterns that start with `//`, files of the workspace, as
+    /// `//` paths (decision 0031).
     ///
-    /// A module can make one action per file with it.
+    /// A module can make one action per file with it, or find the projects of a workspace.
+    /// A pattern of the workspace is read from the directory before its first wildcard, as `sources` reads it, and
+    /// only as deep as the pattern reaches: `//*/package.json` reads the root and the directories in it.
+    /// The patterns of one call are all of the package, or all of the workspace.
     ///
     /// # Arguments
-    /// * `include`: As for `glob()`.
-    /// * `exclude`: As for `glob()`.
+    /// * `include`: As for `glob()`, or patterns from the root, such as `//packages/*/package.json`.
+    /// * `exclude`: As for `glob()`, in the same form as `include`.
+    ///
+    /// Examples:
+    /// ```python
+    /// tests = files(["tests/**/*_test.sh"])
+    /// manifests = files(["//packages/*/package.json"], exclude = ["//packages/legacy/package.json"])
+    /// ```
     fn files<'v>(
         include: UnpackList<String>,
         #[starlark(require = named, default = UnpackList::default())] exclude: UnpackList<String>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Vec<String>> {
         let collector = collector(eval, "files")?;
-        let selection = Selection::globs(&include.items, &exclude.items)?;
-        let listed = selection.list(&collector.root.join(&collector.dir))?;
-        Ok(listed.into_iter().map(|path| path.to_string_lossy().into_owned()).collect())
+        listed_files(collector, &include.items, &exclude.items)
+    }
+
+    /// The text of a file of the workspace, so that a module can read what a project file says (decision 0031).
+    ///
+    /// The path is relative to the package, or to the root of the workspace after `//`, such as
+    /// `//Directory.Build.props`; `..` can go up to the root, and not above it.
+    /// The file must be UTF-8 text; a byte order mark at its start is not part of the text.
+    /// The package records each file that it read, with the digest of its content, as it records git refs: the file
+    /// is an input of the evaluation.
+    /// `toml.decode()`, `yaml.decode()`, `xml.decode()` and `json.decode()` make values of the text.
+    ///
+    /// # Arguments
+    /// * `path`: The file, such as `package.json` or `//pnpm-workspace.yaml`.
+    ///
+    /// Examples:
+    /// ```python
+    /// manifest = json.decode(read("package.json"))
+    /// ```
+    fn read<'v>(#[starlark(require = pos)] path: &str, eval: &mut Evaluator<'v, '_, '_>) -> anyhow::Result<String> {
+        workspace::read(collector(eval, "read")?, path)
+    }
+
+    /// A path relative to the package as a path of the workspace: `//` and the path from the root, without `.` and
+    /// `..` (decision 0031).
+    ///
+    /// A module that reads files needs it to find the files that a file names by a relative path.
+    /// A path that starts with `//` is normalized; an absolute path, and a path above the root, are errors.
+    ///
+    /// # Arguments
+    /// * `path`: Such as `src/App/App.csproj`; `.` is the package itself.
+    ///
+    /// Examples:
+    /// ```python
+    /// project = workspace_path("src/App/App.csproj")    # "//services/orders/src/App/App.csproj"
+    /// ```
+    fn workspace_path<'v>(
+        #[starlark(require = pos)] path: &str,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<String> {
+        let collector = collector(eval, "workspace_path")?;
+        let relative =
+            workspace::resolve(&collector.dir, path).map_err(|e| anyhow::anyhow!("workspace_path(): {e}"))?;
+        Ok(workspace::workspace_label(&relative))
+    }
+
+    /// The label of the package that holds a path, such as `//libs/core`, or None when no package holds it
+    /// (decision 0031).
+    ///
+    /// The package is the nearest directory at or above the path that holds a `tasks.star` or a `tasks.yaml`; the
+    /// root's label is `//`.
+    /// The path is relative to the package, or to the root after `//`, and it does not need to exist.
+    ///
+    /// # Arguments
+    /// * `path`: A file or a directory, such as `../core/Core.csproj` or `//libs/core`.
+    ///
+    /// Examples:
+    /// ```python
+    /// package(deps = [package_of("../core/Core.csproj")])
+    /// ```
+    fn package_of<'v>(
+        #[starlark(require = pos)] path: &str,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<NoneOr<String>> {
+        let collector = collector(eval, "package_of")?;
+        let relative = workspace::resolve(&collector.dir, path).map_err(|e| anyhow::anyhow!("package_of(): {e}"))?;
+        Ok(match workspace::package_label(&collector.root, &relative) {
+            Some(label) => NoneOr::Other(label),
+            None => NoneOr::None,
+        })
     }
 
     /// An OCI (Open Container Initiative) image, as a source: by a reference with its digest, or built from a

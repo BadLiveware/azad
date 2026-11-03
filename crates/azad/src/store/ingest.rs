@@ -17,22 +17,24 @@ pub enum Selection {
     /// Every entry, also empty directories.
     All,
     /// The files and links whose path, relative to the root, matches an `include` glob and no `exclude` glob. A
-    /// directory is in the tree only when it holds a selected entry. `*` does not match `/`; `**` does.
-    Globs { include: GlobSet, exclude: GlobSet },
+    /// directory is in the tree only when it holds a selected entry. `*` does not match `/`; `**` does. `reach` says
+    /// which directories can hold a match, so that the others are not read.
+    Globs { include: GlobSet, exclude: GlobSet, reach: Vec<Reach> },
     /// Exactly these files and links, by path relative to the root. A directory is in the tree only when it holds one.
     Paths(BTreeSet<PathBuf>),
 }
 
 impl Selection {
     pub fn globs<S: AsRef<str>>(include: &[S], exclude: &[S]) -> Result<Self, StoreError> {
-        Ok(Selection::Globs { include: glob_set(include)?, exclude: glob_set(exclude)? })
+        let reach = include.iter().map(|pattern| Reach::of(pattern.as_ref())).collect();
+        Ok(Selection::Globs { include: glob_set(include)?, exclude: glob_set(exclude)?, reach })
     }
 
     /// Whether the selection keeps a file or link, by its path relative to the root.
     pub fn keeps_leaf(&self, relative: &Path) -> bool {
         match self {
             Selection::All => true,
-            Selection::Globs { include, exclude } => include.is_match(relative) && !exclude.is_match(relative),
+            Selection::Globs { include, exclude, .. } => include.is_match(relative) && !exclude.is_match(relative),
             Selection::Paths(paths) => paths.contains(relative),
         }
     }
@@ -41,7 +43,8 @@ impl Selection {
     fn may_hold(&self, relative: &Path) -> bool {
         match self {
             Selection::Paths(paths) => paths.iter().any(|p| p.starts_with(relative)),
-            Selection::All | Selection::Globs { .. } => true,
+            Selection::Globs { reach, .. } => reach.iter().any(|reach| reach.may_hold(relative)),
+            Selection::All => true,
         }
     }
 
@@ -73,6 +76,47 @@ impl Selection {
             }
         }
         Ok(())
+    }
+}
+
+/// The characters that make a segment of a pattern more than its literal name.
+const GLOB_CHARACTERS: [char; 5] = ['*', '?', '[', '{', '\\'];
+const ANY_DEPTH: &str = "**";
+
+/// Where the files that a pattern matches can be: below the directory before its first wildcard, and at most `depth`
+/// levels below it, or at any depth when the pattern has `**`.
+#[derive(Debug, Clone)]
+pub struct Reach {
+    prefix: Vec<String>,
+    depth: Option<usize>,
+}
+
+impl Reach {
+    fn of(pattern: &str) -> Self {
+        let segments: Vec<&str> = pattern.split('/').collect();
+        let wildcard = segments.iter().position(|s| s.contains(GLOB_CHARACTERS)).unwrap_or(segments.len() - 1);
+        let rest = &segments[wildcard..];
+        let depth = match rest.iter().any(|segment| segment.contains(ANY_DEPTH)) {
+            true => None,
+            false => Some(rest.len()),
+        };
+        Reach { prefix: segments[..wildcard].iter().map(|s| (*s).to_owned()).collect(), depth }
+    }
+
+    /// Whether the directory `relative` can hold a file that the pattern matches: it is on the way to the pattern's
+    /// directory, or below it and not too deep.
+    fn may_hold(&self, relative: &Path) -> bool {
+        let Some(dir) = relative.iter().map(|part| part.to_str()).collect::<Option<Vec<&str>>>() else {
+            return true;
+        };
+        let shared = dir.len().min(self.prefix.len());
+        if dir[..shared] != self.prefix[..shared] {
+            return false;
+        }
+        match self.depth {
+            None => true,
+            Some(depth) => dir.len() < self.prefix.len() + depth,
+        }
     }
 }
 
@@ -146,5 +190,28 @@ impl Store {
             return Ok(Some(Node::File { digest, executable }));
         }
         Err(StoreError::UnsupportedFileType(path.to_owned()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn may_hold(pattern: &str, dir: &str) -> bool {
+        Reach::of(pattern).may_hold(Path::new(dir))
+    }
+
+    #[test]
+    fn a_pattern_reaches_only_the_directories_that_can_hold_its_files() {
+        assert!(may_hold("libs/core/*.cs", "libs"));
+        assert!(may_hold("libs/core/*.cs", "libs/core"));
+        assert!(!may_hold("libs/core/*.cs", "libs/core/bin"));
+        assert!(!may_hold("libs/core/*.cs", "apps"));
+        assert!(may_hold("libs/*/package.json", "libs/web"));
+        assert!(!may_hold("libs/*/package.json", "libs/web/node_modules"));
+        assert!(!may_hold("Directory.Build.props", "src"));
+        assert!(may_hold("libs/**/*.cs", "libs/core/deep/er"));
+        assert!(may_hold("*/{a,b/c}.txt", "x/b"));
+        assert!(may_hold("**", "any/where"));
     }
 }

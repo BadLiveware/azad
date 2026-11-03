@@ -136,6 +136,10 @@ pub struct Package {
     /// The git refs that evaluation resolved, such as `HEAD` or `refs/tags/v1.4.0`, with the commit that each named
     /// (decision 0021). A ref can move, so these are inputs of the evaluation; the facts of a commit are not.
     pub git_refs: BTreeMap<String, String>,
+    /// The files of the workspace that evaluation read with `read()`, by their workspace path, such as
+    /// `//src/App/App.csproj`, with the digest of the content that it read (decision 0031). A file can change, so
+    /// these are inputs of the evaluation, as `git_refs` are.
+    pub read_files: BTreeMap<String, Digest>,
     /// What evaluation decided, and why, for the user (decision 0022).
     pub notes: Vec<Note>,
     /// The tags of tasks and actions, by label, which `--include` and `--exclude` select by (decision 0023).

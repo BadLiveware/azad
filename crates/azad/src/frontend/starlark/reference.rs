@@ -39,7 +39,10 @@ action of the package.
 
 Paths:
 
-- The patterns of `glob()` and `files()` are relative to the package directory.
+- The patterns of `glob()` are relative to the package directory, and those of `files()` too, unless they start with \
+`//`, which is the root of the workspace.
+- `read()`, `workspace_path()` and `package_of()` take a path relative to the package directory, or one from the root \
+after `//`.
 - The keys of `inputs` and `caches` are absolute paths in the sandbox, such as `/src`.
 - `outputs` are relative to `/work`, the directory in which the command starts.
 
@@ -48,6 +51,13 @@ history of the workspace's repository.
 `@std//version.star` builds versions on them: `commit_calver()` and `latest_release()`.
 
 `@std//project.star` makes a project's goals from parts (decision 0025): `part()` puts tasks in roles, such as `fmt` or `test`, and `project()` makes a goal for each role, and the goal `ci`.
+
+`read()` gives the text of a file of the workspace, and three namespaces make values of it, as Starlark's `json` does \
+(decision 0031): `toml`, `yaml` and `xml`. With `files()`, `workspace_path()` and `package_of()`, modules of the \
+standard library read project files: `@std//dotnet.star` (`project_info()`, `dependencies()` and the parts of a .NET \
+project), `@std//python.star` and `@std//node.star` (`dependencies()` of a uv project and of a pnpm, npm or Yarn \
+project), and `@std//paths.star` for `//` paths. A package takes them only when it loads them, as in \
+`package(deps = dependencies(\"src/App/App.csproj\"))`.
 
 A package can also be declared as data in `tasks.yaml`, which calls modules that return parts (decision 0027); `docs/yaml.md` describes it.";
 

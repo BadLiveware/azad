@@ -17,7 +17,8 @@ A module can define functions that declare actions, but it cannot declare action
 
 Paths:
 
-- The patterns of `glob()` and `files()` are relative to the package directory.
+- The patterns of `glob()` are relative to the package directory, and those of `files()` too, unless they start with `//`, which is the root of the workspace.
+- `read()`, `workspace_path()` and `package_of()` take a path relative to the package directory, or one from the root after `//`.
 - The keys of `inputs` and `caches` are absolute paths in the sandbox, such as `/src`.
 - `outputs` are relative to `/work`, the directory in which the command starts.
 
@@ -25,6 +26,8 @@ Two namespaces give values that are not actions (decision 0021): `semver`, for s
 `@std//version.star` builds versions on them: `commit_calver()` and `latest_release()`.
 
 `@std//project.star` makes a project's goals from parts (decision 0025): `part()` puts tasks in roles, such as `fmt` or `test`, and `project()` makes a goal for each role, and the goal `ci`.
+
+`read()` gives the text of a file of the workspace, and three namespaces make values of it, as Starlark's `json` does (decision 0031): `toml`, `yaml` and `xml`. With `files()`, `workspace_path()` and `package_of()`, modules of the standard library read project files: `@std//dotnet.star` (`project_info()`, `dependencies()` and the parts of a .NET project), `@std//python.star` and `@std//node.star` (`dependencies()` of a uv project and of a pnpm, npm or Yarn project), and `@std//paths.star` for `//` paths. A package takes them only when it loads them, as in `package(deps = dependencies("src/App/App.csproj"))`.
 
 A package can also be declared as data in `tasks.yaml`, which calls modules that return parts (decision 0027); `docs/yaml.md` describes it.
 
@@ -216,21 +219,31 @@ file_set(name = "contracts", sources = ["Contracts/**"], deps = [":analyzers"])
 def files(include: list[str], *, exclude: list[str] = []) -> list[str]
 ```
 
-The paths of the files that `glob()` with the same patterns selects, relative to the package, sorted.
+The paths of the files that patterns select, sorted: the files of the package that `glob()` with the same patterns selects, relative to the package; or, for patterns that start with `//`, files of the workspace, as `//` paths (decision 0031).
 
 #### Parameters
 
 * `include`: (required)
 
-  As for `glob()`.
+  As for `glob()`, or patterns from the root, such as `//packages/*/package.json`.
 
 * `exclude`: (defaults to: `[]`)
 
-  As for `glob()`.
+  As for `glob()`, in the same form as `include`.
 
 #### Details
 
-A module can make one action per file with it.
+A module can make one action per file with it, or find the projects of a workspace.
+A pattern of the workspace is read from the directory before its first wildcard, as `sources` reads it, and
+only as deep as the pattern reaches: `//*/package.json` reads the root and the directories in it.
+The patterns of one call are all of the package, or all of the workspace.
+
+#### Examples
+
+```python
+tests = files(["tests/**/*_test.sh"])
+manifests = files(["//packages/*/package.json"], exclude = ["//packages/legacy/package.json"])
+```
 
 ---
 
@@ -545,6 +558,65 @@ package(deps = ["//libs/logging"], provides = ["build"])
 
 ---
 
+## package\_of
+
+```python
+def package_of(path: str, /) -> None | str
+```
+
+The label of the package that holds a path, such as `//libs/core`, or None when no package holds it (decision 0031).
+
+#### Parameters
+
+* `path`: (required)
+
+  A file or a directory, such as `../core/Core.csproj` or `//libs/core`.
+
+#### Details
+
+The package is the nearest directory at or above the path that holds a `tasks.star` or a `tasks.yaml`; the
+root's label is `//`.
+The path is relative to the package, or to the root after `//`, and it does not need to exist.
+
+#### Examples
+
+```python
+package(deps = [package_of("../core/Core.csproj")])
+```
+
+---
+
+## read
+
+```python
+def read(path: str, /) -> str
+```
+
+The text of a file of the workspace, so that a module can read what a project file says (decision 0031).
+
+#### Parameters
+
+* `path`: (required)
+
+  The file, such as `package.json` or `//pnpm-workspace.yaml`.
+
+#### Details
+
+The path is relative to the package, or to the root of the workspace after `//`, such as
+`//Directory.Build.props`; `..` can go up to the root, and not above it.
+The file must be UTF-8 text; a byte order mark at its start is not part of the text.
+The package records each file that it read, with the digest of its content, as it records git refs: the file
+is an input of the evaluation.
+`toml.decode()`, `yaml.decode()`, `xml.decode()` and `json.decode()` make values of the text.
+
+#### Examples
+
+```python
+manifest = json.decode(read("package.json"))
+```
+
+---
+
 ## semver.matches
 
 ```python
@@ -777,6 +849,120 @@ host, such as tests that start sandboxes.
 build = task(name = "build", cmd = "go build -o out/app .", sources = ["**/*.go", "go.*"], generates = ["out"], image = go)
 test = task(name = "test", cmd = "out/app --self-test", deps = [build], image = go)
 goal("check", require = [test])
+```
+
+---
+
+## toml.decode
+
+```python
+def toml.decode(text: str, /)
+```
+
+The value of a TOML (Tom's Obvious Minimal Language) document, such as a `pyproject.toml`, as a dict.
+
+#### Parameters
+
+* `text`: (required)
+
+  The document, such as `read("pyproject.toml")`.
+
+#### Details
+
+Tables are dicts, arrays are lists, and strings, integers, floats and booleans are themselves.
+A date or a time is its text, such as `"1979-05-27T07:32:00Z"`.
+
+#### Examples
+
+```python
+name = toml.decode(read("pyproject.toml"))["project"]["name"]
+```
+
+---
+
+## workspace\_path
+
+```python
+def workspace_path(path: str, /) -> str
+```
+
+A path relative to the package as a path of the workspace: `//` and the path from the root, without `.` and `..` (decision 0031).
+
+#### Parameters
+
+* `path`: (required)
+
+  Such as `src/App/App.csproj`; `.` is the package itself.
+
+#### Details
+
+A module that reads files needs it to find the files that a file names by a relative path.
+A path that starts with `//` is normalized; an absolute path, and a path above the root, are errors.
+
+#### Examples
+
+```python
+project = workspace_path("src/App/App.csproj")    # "//services/orders/src/App/App.csproj"
+```
+
+---
+
+## xml.decode
+
+```python
+def xml.decode(text: str, /)
+```
+
+The root element of an XML document, such as a `.csproj` file, as a dict.
+
+#### Parameters
+
+* `text`: (required)
+
+  The document, such as `read("App.csproj")`.
+
+#### Details
+
+An element is `{"tag": <name>, "attrs": {<name>: <value>}, "children": [<element>], "text": <text>}`.
+Names are local names: a namespace is dropped, so `<Project xmlns="...">` and `<Project>` are the same.
+`children` holds the child elements in their order; `text` is the text directly in the element, with the
+white space at its ends removed, and CDATA sections are text. Comments and processing instructions are left
+out. A document type declaration (`<!DOCTYPE>`) is refused.
+
+#### Examples
+
+```python
+project = xml.decode(read("App.csproj"))
+references = [item["attrs"]["Include"] for group in project["children"] if group["tag"] == "ItemGroup"
+              for item in group["children"] if item["tag"] == "ProjectReference"]
+```
+
+---
+
+## yaml.decode
+
+```python
+def yaml.decode(text: str, /)
+```
+
+The value of a YAML document, such as a `pnpm-workspace.yaml`.
+
+#### Parameters
+
+* `text`: (required)
+
+  The document, such as `read("pnpm-workspace.yaml")`.
+
+#### Details
+
+Mappings are dicts, sequences are lists, and scalars are strings, ints, floats, bools or None, as YAML 1.2
+reads them. The keys of a dict are text: a key that is a number or a bool is its text. Anchors and aliases are
+resolved. The text must hold one document, or none, which gives None.
+
+#### Examples
+
+```python
+globs = yaml.decode(read("//pnpm-workspace.yaml"))["packages"]
 ```
 
 ---

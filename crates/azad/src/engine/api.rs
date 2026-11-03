@@ -974,6 +974,7 @@ fn merge(into: &mut Package, package: Package) {
     into.workspace_views.extend(package.workspace_views);
     into.declared_at.extend(package.declared_at);
     into.git_refs.extend(package.git_refs);
+    into.read_files.extend(package.read_files);
     into.tags.extend(package.tags);
 }
 

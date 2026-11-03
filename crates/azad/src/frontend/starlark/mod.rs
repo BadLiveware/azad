@@ -3,11 +3,13 @@
 //! Evaluation is pure. A function such as `glob()` returns a reference; the engine stores the files after evaluation.
 
 mod builtins;
+mod decode;
 mod git;
 mod loader;
 mod reference;
 mod semver;
 mod values;
+mod workspace;
 pub mod yaml;
 
 pub use loader::{Context, EvalError, evaluate, evaluate_in, expand, expand_calls};
@@ -77,9 +79,14 @@ impl Frontend for StarlarkFrontend {
 pub fn package_of(root: &Path, dir: &Path) -> Option<String> {
     let root = std::fs::canonicalize(root).ok()?;
     let dir = std::fs::canonicalize(dir).ok()?;
-    let found =
-        dir.ancestors().take_while(|ancestor| ancestor.starts_with(&root)).find(|ancestor| has_tasks_file(ancestor))?;
-    found.strip_prefix(&root).ok().map(|package| package.display().to_string())
+    package_at(&root, dir.strip_prefix(&root).ok()?)
+}
+
+/// The package of a path relative to `root`, which need not exist: the nearest directory at or above it that holds a
+/// `tasks.star` or a `tasks.yaml`, relative to `root` ("" for the root). `None` when there is none.
+pub fn package_at(root: &Path, relative: &Path) -> Option<String> {
+    let found = relative.ancestors().find(|ancestor| has_tasks_file(&root.join(ancestor)))?;
+    Some(found.display().to_string())
 }
 
 const STARLARK_ERROR_PREFIX: &str = "error: ";
