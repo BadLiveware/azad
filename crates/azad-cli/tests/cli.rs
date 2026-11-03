@@ -855,3 +855,34 @@ fn an_isolated_build_of_a_dockerfile_gets_the_secrets_of_its_task() {
     assert!(given.status.success(), "{}", stderr(&given));
     assert!(stderr(&given).contains("token=s3cret"), "{}", stderr(&given));
 }
+
+#[test]
+fn check_of_a_pattern_reports_what_run_refuses_in_each_package() {
+    let dir = repository();
+    let root = dir.path();
+    let task = "task(name = \"ci\", cmd = \"true\", dependencies = True)\n";
+    write(root, "a/tasks.star", &format!("package(deps = [\"//b\"])\n{task}"));
+    write(root, "b/tasks.star", &format!("package(deps = [\"//a\"])\n{task}"));
+    write(root, "c/tasks.star", &format!("load(\"//tools/nope.star\", \"x\")\n{task}"));
+    write(root, "d/tasks.star", task);
+    let output = azad(root, &["check", "ci"]);
+    let report = stdout(&output);
+    assert_eq!(output.status.code(), Some(1), "{report}{}", stderr(&output));
+    let reported = |label: &str, problem: &str| {
+        report.lines().any(|line| line.starts_with(&format!("unsupported {label}: ")) && line.contains(problem))
+    };
+    assert!(reported("//a:ci", "the dependencies form a cycle: //b -> //a -> //b"), "{report}");
+    assert!(reported("//c:ci", "//tools/nope.star does not exist"), "{report}");
+    assert!(!report.contains("//d:ci"), "{report}");
+    let single = azad(root, &["check", "//b:ci"]);
+    assert_eq!(single.status.code(), Some(1), "{}", stdout(&single));
+}
+
+#[test]
+fn list_fails_when_a_file_of_the_workspace_cannot_be_read() {
+    let dir = workspace();
+    let output = azad(dir.path(), &["list"]);
+    assert!(lists(&stdout(&output), "//:check"), "{}", stdout(&output));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("1 of the listed files cannot be read"), "{}", stderr(&output));
+}

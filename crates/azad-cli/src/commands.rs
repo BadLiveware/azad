@@ -129,6 +129,11 @@ pub(crate) fn list(engine: &Engine) -> Result<ExitCode> {
         bail!("{} has no goals: add a tasks.star, or a workflow in .github/workflows", engine.config().root.display());
     }
     print!("{}", listing(&targets));
+    let unread = targets.iter().filter(|listed| listed.problem.is_some()).count();
+    if unread > 0 {
+        eprintln!("azad: {unread} of the listed files cannot be read");
+        return Ok(ExitCode::FAILURE);
+    }
     Ok(ExitCode::SUCCESS)
 }
 

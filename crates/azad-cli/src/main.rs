@@ -129,11 +129,14 @@ enum Command {
         action: Option<String>,
     },
     /// List the goals of the workspace: the goals of every tasks.star, and every workflow and job in .github/workflows.
+    /// It exits with 1 when a file of them cannot be read.
     List,
-    /// Report what the target's frontend cannot run, runs differently, or ignores, before anything runs.
+    /// Report what the target's frontend cannot run, runs differently, or ignores, and what `azad run` would refuse,
+    /// such as a cycle of dependencies, before anything runs.
     Check {
-        /// A goal, as `azad run` takes it: a label such as //services/orders:check, a short name such as check (the
-        /// goal of the package of the current directory), a workflow, or <file>.azad:<goal>.
+        /// A goal, as `azad run` takes it: a label such as //services/orders:check, a pattern such as //...:check, a
+        /// short name such as check (the goal of the package of the current directory, or of every package below it),
+        /// a workflow, or <file>.azad:<goal>.
         target: String,
     },
     /// Print the graph of a goal in the text form of the IR, with every source stored and named by its digest.

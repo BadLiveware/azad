@@ -564,8 +564,50 @@ impl Engine {
             .collect())
     }
 
-    /// What the frontend of a target reports about it, before anything runs.
+    /// What the frontend of a target reports about it, and what `run` would refuse in it, before anything runs. A
+    /// pattern, `//dir/...:name`, is checked in every package at or below `dir` that defines `name`.
     pub fn check(&self, target: &str) -> Result<Vec<Finding>, EngineError> {
+        let mut findings = match parse_pattern(target) {
+            Some((dir, name)) => self.check_packages(dir, name)?,
+            None => self.check_one(target)?,
+        };
+        findings.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.location.cmp(&b.location)));
+        Ok(findings)
+    }
+
+    /// The findings of the goal `name` in each package at or below `dir`; a package that cannot be read is one.
+    fn check_packages(&self, dir: &str, name: &str) -> Result<Vec<Finding>, EngineError> {
+        let mut findings = Vec::new();
+        for target in self.defined_in_packages(dir, name)? {
+            match self.check_one(&target) {
+                Ok(found) => findings.extend(found),
+                Err(error) => findings.push(Finding {
+                    severity: Severity::Unsupported,
+                    location: target,
+                    message: error.to_string(),
+                }),
+            }
+        }
+        Ok(findings)
+    }
+
+    /// The labels of the goal or task `name` of the packages at or below `dir` that define it, or that cannot be read,
+    /// so that a check reports them.
+    fn defined_in_packages(&self, dir: &str, name: &str) -> Result<Vec<String>, EngineError> {
+        let mut defined = Vec::new();
+        for package in self.packages()?.into_iter().filter(|package| is_at_or_below(package, dir)) {
+            let goal = label(&package, name);
+            if !matches!(self.read(&goal, &mut |_| {}), Err(EngineError::UnknownGoal { .. })) {
+                defined.push(goal);
+            }
+        }
+        if defined.is_empty() {
+            return Err(EngineError::NoPackageDefines { dir: dir.to_owned(), name: name.to_owned() });
+        }
+        Ok(defined)
+    }
+
+    fn check_one(&self, target: &str) -> Result<Vec<Finding>, EngineError> {
         let frontend = self.frontend(target)?;
         let request = LoadRequest { root: &self.config.root, target, platform: &self.config.platform };
         let mut findings = frontend
@@ -576,8 +618,17 @@ impl Engine {
             findings.extend(unread_dependencies(&loaded.package));
             findings.extend(self.containers(loaded.package)?);
         }
-        findings.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.location.cmp(&b.location)));
+        findings.extend(self.refusal(target));
         Ok(findings)
+    }
+
+    /// What `run` would refuse in the target before anything runs, such as a dependency that forms a cycle, as a
+    /// finding: the graph of the goal, with its dependencies, is made as `run` makes it, but nothing is stored.
+    fn refusal(&self, target: &str) -> Option<Finding> {
+        let selected =
+            self.read(target, &mut |_| {}).and_then(|(package, goal, _)| self.select(package, &goal, &mut |_| {}));
+        let error = selected.err()?;
+        Some(Finding { severity: Severity::Unsupported, location: target.to_owned(), message: error.to_string() })
     }
 
     /// The tools that the actions of a package need and that are not found, as findings.
