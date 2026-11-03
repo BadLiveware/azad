@@ -59,5 +59,6 @@ These are what people use each day in a CI service, so the orchestrator needs th
   - Two goals of a run overlap in time, and an action that both need runs once.
 - A cancel does not stop an action that runs already, so a long step still takes its place in the pool until it ends.
   To stop it, the executor contract needs a way to stop an action; that comes when a use needs it.
-- The GitHub App needs the events `check_run` and `check_suite`, so that re-runs reach the orchestrator.
+- The GitHub App must subscribe to the event "Check run", or GitHub does not send "Re-run" of one check run; it sends "Re-run all checks" as `check_suite` without a subscription.
+  Both were tried on GitHub, on the development host.
 - `Conclusion` has `cancelled`, as GitHub has it, and the site shows cancelled runs and goals.
