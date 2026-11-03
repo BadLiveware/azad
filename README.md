@@ -46,7 +46,7 @@ The word itself is *āzād* (آزاد), "free" in Persian, Kurdish, Urdu and Hin
 - Cache volumes, so a tool such as Cargo keeps its incremental state between runs.
 - Simple GHA workflows, run without a change: `run:` steps, `actions/checkout`, `setup-*` actions, matrices, job outputs and artifacts.
 - GHA+ hints: a step that says what it reads and writes is skipped when those files did not change.
-- Remote caches (a directory, or the GitHub Actions cache), with signed entries, and Azad as a GitHub Action (`action.yml`).
+- Remote caches (a directory, or the GitHub Actions cache), with signed entries, and Azad as a GitHub Action (`action.yml`), which installs a release of Azad; [azad-action-example](https://github.com/BadLiveware/azad-action-example) is a repository that uses it.
 - Its own CI, on one machine: a microVM sandbox (Cloud Hypervisor), the executor as a service, and an orchestrator that takes GitHub's webhooks and gives check runs.
 
 ## Install
