@@ -60,7 +60,7 @@ Each kind of user needs one binary (decision 0029):
 
 | Binary | Who needs it | Systems |
 |---|---|---|
-| `azad` | Everyone: the task runner, and the Azad action in GitHub Actions | Linux, macOS |
+| `azad` | Everyone: the task runner, and the Azad action in GitHub Actions, which installs it from a release | Linux, macOS |
 | `azad-gha-runner` | Only to run GHA workflow files through Azad; put it next to `azad` | Linux |
 | `azad-executor` | Hosts that run CI; its archive holds `azad-guest`, the init of its microVMs | Linux |
 | `azad-orchestrator` | The service that takes GitHub's events and runs their goals | Linux |

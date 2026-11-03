@@ -1,8 +1,9 @@
-// Runs an Azad goal in a GitHub Actions job: prepares the sandbox, passes the cache service's address and token on
-// (they are in this process's environment), and sets the outputs from Azad's report. While Azad runs, problem
-// matchers turn the plain error lines of tools such as Cargo into annotations.
+// Runs an Azad goal in a GitHub Actions job: installs a release of Azad, prepares the sandbox, passes the cache
+// service's address and token on (they are in this process's environment), and sets the outputs from Azad's report.
+// While Azad runs, problem matchers turn the plain error lines of tools such as Cargo into annotations.
 
 const { spawn, spawnSync } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -10,9 +11,104 @@ const path = require("node:path");
 const APPARMOR_USERNS = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
 const REPORT_FIELDS = ["holds", "needed", "ran", "cached", "failed", "skipped"];
 const MATCHER_FILES = [path.join(__dirname, "cargo-matcher.json")];
+const GITHUB_URL = "https://github.com";
+const AZAD_REPOSITORY = "BadLiveware/azad";
+const LATEST = "latest";
+const RELEASE_TAG = /^v\d+\.\d{8}\.\d+$/;
+// The GHA runner goes next to azad, which finds it there when a goal is a workflow file.
+const PROGRAMS = ["azad", "azad-gha-runner"];
+const ARCHITECTURES = { x64: "x86_64", arm64: "aarch64" };
+const INSTALLED_MARK = ".installed";
 
 function input(name) {
   return (process.env[`INPUT_${name.toUpperCase()}`] || "").trim();
+}
+
+function releaseTarget() {
+  const architecture = ARCHITECTURES[process.arch];
+  if (process.platform !== "linux" || !architecture) {
+    throw new Error(`the Azad action runs on Linux runners on x64 or arm64, not ${process.platform} on ${process.arch}`);
+  }
+  return `${architecture}-unknown-linux-musl`;
+}
+
+// The version input; else the release that the workflow pins the action to, so that the action and azad match; else
+// the latest release.
+function wantedVersion() {
+  const version = input("version");
+  if (version) {
+    return version.replace(/^v/, "");
+  }
+  const ref = process.env.GITHUB_ACTION_REF || "";
+  if (RELEASE_TAG.test(ref)) {
+    return ref.slice(1);
+  }
+  return LATEST;
+}
+
+// GitHub answers a request for the latest release with a redirect to the page of its tag, which needs no token.
+async function latestVersion(repository) {
+  const url = `${GITHUB_URL}/${repository}/releases/${LATEST}`;
+  const response = await fetch(url, { redirect: "manual" });
+  const tag = (response.headers.get("location") || "").split("/").pop();
+  if (!RELEASE_TAG.test(tag)) {
+    throw new Error(`${url} names no release: ${response.status} ${response.statusText}`);
+  }
+  return tag.slice(1);
+}
+
+async function download(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${url}: ${response.status} ${response.statusText}`);
+  }
+  return Buffer.from(await response.arrayBuffer());
+}
+
+async function installProgram(release, program, target, dir) {
+  const archive = `${program}-${target}.tar.gz`;
+  const [bytes, checksum] = await Promise.all([download(`${release}/${archive}`), download(`${release}/${archive}.sha256`)]);
+  const expected = checksum.toString("utf8").split(/\s+/)[0];
+  const actual = crypto.createHash("sha256").update(bytes).digest("hex");
+  if (actual !== expected) {
+    throw new Error(`${release}/${archive} has the SHA-256 ${actual}, but its checksum file says ${expected}`);
+  }
+  const file = path.join(dir, archive);
+  fs.writeFileSync(file, bytes);
+  sh(`tar -xzf '${file}' -C '${dir}'`);
+  fs.rmSync(file);
+}
+
+// Installs the release's programs in the runner's tool cache, which a self-hosted runner keeps between jobs, and
+// returns the path of azad.
+async function installRelease() {
+  const target = releaseTarget();
+  const repository = process.env.GITHUB_ACTION_REPOSITORY || AZAD_REPOSITORY;
+  let version = wantedVersion();
+  if (version === LATEST) {
+    version = await latestVersion(repository);
+  }
+  const dir = path.join(process.env.RUNNER_TOOL_CACHE || os.tmpdir(), "azad", version, target);
+  const release = `${GITHUB_URL}/${repository}/releases/download/v${version}`;
+  console.log(`Azad ${version} from ${release}`);
+  if (!fs.existsSync(path.join(dir, INSTALLED_MARK))) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    await Promise.all(PROGRAMS.map((program) => installProgram(release, program, target, dir)));
+    fs.writeFileSync(path.join(dir, INSTALLED_MARK), "");
+  }
+  return path.join(dir, "azad");
+}
+
+// A binary that the workflow built, as Azad's own CI does, or a release.
+async function azad(workspace) {
+  if (!input("binary")) {
+    return installRelease();
+  }
+  if (input("version")) {
+    throw new Error("give the action a version or a binary, not both");
+  }
+  return path.resolve(workspace, input("binary"));
 }
 
 function sh(command) {
@@ -57,9 +153,9 @@ function setOutputs(reportFile) {
   fs.appendFileSync(process.env.GITHUB_OUTPUT, lines);
 }
 
-function main() {
+async function main() {
   const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
-  const binary = path.resolve(workspace, input("binary"));
+  const binary = await azad(workspace);
   prepareSandbox();
   const reportFile = path.join(process.env.RUNNER_TEMP || os.tmpdir(), `azad-report-${process.pid}.json`);
   const args = ["run", input("goal"), "--isolated", "--cache", input("cache"), "--output", "github", "--report", reportFile, "-j", input("jobs"), "--verbosity", input("verbosity")];
@@ -99,4 +195,7 @@ function main() {
   });
 }
 
-main();
+main().catch((error) => {
+  console.log(`::error title=Azad::${error.message}`);
+  process.exit(1);
+});

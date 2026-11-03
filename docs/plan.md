@@ -31,16 +31,7 @@ Azad is tried on two repositories:
 
 ## Next
 
-### 1. Releases
-
-People and CI get Azad without a Rust toolchain.
-
-- Done: Azad releases itself on each green push to main that makes a release, versioned from Conventional Commits, and its CI runs on its latest release (decision 0030); a release has one archive for each binary, for Linux and macOS, and two images (decision 0029).
-- The Azad action downloads a release, by version or the latest, instead of taking the path of a binary.
-
-Done when: a workflow in another repository runs a goal with the action and no Rust toolchain, and a Dockerfile copies `azad` from the `azad-bin` image.
-
-### 2. Real GitHub
+### 1. Real GitHub
 
 The orchestrator of decision 0020 against GitHub itself.
 
@@ -50,7 +41,7 @@ The orchestrator of decision 0020 against GitHub itself.
 
 Done when: a pull request on a real repository gets Azad's check runs, a push to the default branch fills the cache, and a later pull request gets hits from it but never writes to the default branch's cache.
 
-### 3. Gaps that the monorepo found
+### 2. Gaps that the monorepo found
 
 Smaller items; each one is done when the monorepo no longer needs its workaround.
 
@@ -60,7 +51,7 @@ Smaller items; each one is done when the monorepo no longer needs its workaround
 - A check that a task's declared sources hold what it reads, from a trace in the sandbox, so that declarations cannot drift from what the tools read.
   Dependencies can now come from project files (decision 0031): `.csproj`, uv `pyproject.toml` and `package.json`, so `package(deps = ...)` does not drift from them; the sources of a task can still drift.
 
-### 4. Hosts
+### 3. Hosts
 
 The executor on machines that Azad owns.
 
@@ -69,27 +60,27 @@ The executor on machines that Azad owns.
 
 Done when: a goal runs on a host through the plan, and CI runs the VM tests.
 
-### 5. The planner
+### 4. The planner
 
 Grouping, placement where the inputs are, and sizing from history.
 
-### 6. Remote execution
+### 5. Remote execution
 
 Several hosts, and a shared action cache with trust levels for each result.
 
-### 7. Targets
+### 6. Targets
 
 Ordered access, memory of what was applied, promotion, and plans bound to their review (see "Later: state outside the build" in `docs/vision.md`).
 
-### 8. The merge queue
+### 7. The merge queue
 
 Entries, a speculative base, batches, and bisection that reuses results.
 
-### 9. Policy and trust
+### 8. Policy and trust
 
 Who may run what, central gates that a repository cannot remove, and secrets for impure actions.
 
-### 10. Logs and history
+### 9. Logs and history
 
 A live log stream, stored logs, and runs as a dataset.
 
@@ -112,7 +103,8 @@ Things that are not done, from earlier work; each one is taken when a use needs 
   The executions of a local run live in memory, so a run does not survive a restart of `azad`.
   Azad's own goals do not name events, because its sandbox tests run on the host.
 - **Platforms.**
-  Linux only; macOS is not checked, and the microVM sandbox needs x86_64.
+  The task runner runs on Linux and macOS; isolated runs, the executor and the orchestrator need Linux, and the microVM sandbox needs x86_64.
+  Windows is not supported.
 
 ## History
 
@@ -127,3 +119,4 @@ Things that are not done, from earlier work; each one is taken when a use needs 
 | M7: A tool people use | 2026-11-01 | The task runner on host tools, and Azad as its own CI gate |
 | M8: CI of our own, locally | 2026-11-01 | The microVM sandbox, the executor service, and the local orchestrator |
 | A monorepo | 2026-11-02 | Versions from git history, targets across packages, tasks in images on the working tree, parts, `tasks.yaml`, and the dependency graph |
+| Releases | 2026-11-03 | Azad releases and versions itself, its CI runs on its latest release, and the Azad action installs a release |

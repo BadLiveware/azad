@@ -1,12 +1,17 @@
 name: Azad
-description: Run an Azad goal, with the GitHub Actions cache as its remote cache.
+description: Run an Azad goal, with the GitHub Actions cache as its remote cache, on a Linux runner.
 inputs:
   goal:
     description: The goal to run, such as //:check or .github/workflows/ci.yml.
     required: true
+  version:
+    description: "The release of Azad to run, such as 0.20261103.2, or `latest`. Without it, the action runs the release that the workflow pins the action to, such as BadLiveware/azad@v0.20261103.2, and else the latest release."
+    required: false
+    default: ""
   binary:
-    description: The path of the azad program. There are no released builds yet, so a workflow builds it.
-    required: true
+    description: The path of an azad program to run instead of a release, such as one that the workflow built.
+    required: false
+    default: ""
   signing-key:
     description: The key that signs cache entries, from `azad key generate`, such as a secret. Without it, the cache is read-only.
     required: false

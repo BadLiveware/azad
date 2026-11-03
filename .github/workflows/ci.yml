@@ -143,6 +143,19 @@ jobs:
           binary: ${{ runner.temp }}/azad/azad
       - run: test "${{ steps.azad.outputs.ran }}" = 0 && test "${{ steps.azad.outputs.holds }}" = true
 
+  # As in a workflow of another repository: the action installs Azad's latest release, and nothing builds Rust.
+  action:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./
+        with:
+          goal: //examples/m6-modules:example
+      # A workflow file needs the GHA runner, which the action puts next to azad.
+      - uses: ./
+        with:
+          goal: .github/workflows/modules-example.yml
+
   deny:
     runs-on: ubuntu-24.04
     steps:
@@ -353,7 +366,7 @@ jobs:
           force: "true"
 
   images:
-    needs: [version, build-linux, build-macos, verify, self-build, self-build-again, deny, macos]
+    needs: [version, build-linux, build-macos, verify, self-build, self-build-again, deny, macos, action]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
