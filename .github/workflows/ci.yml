@@ -70,9 +70,9 @@ jobs:
           path: stage0/azad
           retention-days: 1
 
-  # `//:check` and `//:examples` are the checks of a change, in two jobs at the same time. Tasks with an image run
-  # isolated in it, with their results and cache volumes in the GitHub Actions cache; the sandbox tests and the examples
-  # run on the runner, which starts from a copy of their target/.
+  # `//:check` and `//:examples` are the checks of a change, in two jobs at the same time. Each task runs isolated in
+  # Azad's image, the sandbox tests too (decision 0037), with their results and cache volumes in the GitHub Actions
+  # cache.
   self-build:
     needs: stage0
     runs-on: ubuntu-24.04
@@ -80,12 +80,6 @@ jobs:
       fail-fast: false
       matrix:
         goal: [check, examples]
-    # The tasks that run on the runner keep target/ small, as the tasks in the image do (see tasks.star).
-    env:
-      AZAD_DROP_OWN_BUILD: "1"
-      CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -93,8 +87,6 @@ jobs:
           name: azad
           path: ${{ runner.temp }}/azad
       - run: chmod +x "$RUNNER_TEMP/azad/azad"
-      # The tasks that run on the runner use its Rust toolchain, as rust-toolchain.toml pins it.
-      - run: rustup show active-toolchain || rustup toolchain install
       # The images need more disk than the runner has free. Removing preinstalled toolchains that Azad does not use
       # takes over a minute, so it runs while Azad starts; it frees space before the images need it.
       - run: nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost > /dev/null 2>&1 &
@@ -343,11 +335,6 @@ jobs:
   verify:
     needs: build-linux
     runs-on: ubuntu-24.04
-    env:
-      AZAD_DROP_OWN_BUILD: "1"
-      CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
-      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -357,7 +344,6 @@ jobs:
       - run: |
           tar -C "$RUNNER_TEMP/release" -xzf "$RUNNER_TEMP/release/$STAGE0_ARCHIVE"
           "$RUNNER_TEMP/release/azad" --version
-      - run: rustup show active-toolchain || rustup toolchain install
       - run: nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost > /dev/null 2>&1 &
       - uses: ./
         with:
@@ -366,8 +352,9 @@ jobs:
           force: "true"
 
   # This commit's own orchestrator runs the goals that name this event, as it runs them for a webhook: at the event's
-  # trust level, isolated, with a check run for each goal through the job's token (decision 0036). It does not gate a
-  # release yet; it runs next to `//:check`, to show that the orchestrator can run Azad's CI.
+  # trust level, isolated, with a check run for each goal through the job's token (decision 0036): `//:ci`, all of
+  # Azad's checks (decision 0037). It does not gate a release yet; it runs next to `//:check`, forced, to show that the
+  # orchestrator runs Azad's CI.
   orchestrator:
     needs: build-linux
     runs-on: ubuntu-24.04

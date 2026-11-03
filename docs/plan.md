@@ -101,7 +101,8 @@ Things that are not done, from earlier work; each one is taken when a use needs 
   A cached step has no time, because a result does not store how long its action took.
 - **Runs.**
   The executions of a local run live in memory, so a run does not survive a restart of `azad`.
-  `//:isolated-check` names events, and the orchestrator runs it in Azad's CI, forced, next to `//:check`; the sandbox tests and the examples run on the host, so they are not in it.
+  `//:ci` names events, and the orchestrator runs it in Azad's CI, forced, next to `//:check`; it does not gate a release yet.
+  A change of Azad's image takes two commits: its Dockerfile, and then its digest in `tasks.star` (decision 0037).
 - **Platforms.**
   The task runner runs on Linux and macOS; isolated runs, the executor and the orchestrator need Linux, and the microVM sandbox needs x86_64.
   Windows is not supported.
@@ -124,3 +125,4 @@ Things that are not done, from earlier work; each one is taken when a use needs 
 | Check runs and a site | 2026-11-03 | A check run shows a goal's steps, metrics and output; a record of each run; `azad-site` in Leptos, with live logs, on the development host |
 | CI for each day | 2026-11-03 | Runs and goals at the same time with a shared pool of actions, cancels of outdated runs, one check run for each goal and commit, and re-runs from GitHub |
 | The orchestrator in GHA | 2026-11-03 | `azad-orchestrator gha` and the action's `orchestrate`: Azad's own CI runs `//:isolated-check` through the orchestrator |
+| Azad's checks in its sandbox | 2026-11-03 | Azad's image with bubblewrap: the sandbox tests and the examples run isolated, and the orchestrator runs all of Azad's CI as `//:ci` |

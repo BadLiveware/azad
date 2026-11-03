@@ -1,16 +1,17 @@
 """Azad builds and tests Azad: if we cannot run our own CI, we cannot run anyone's.
 
 These are tasks (decision 0015). `azad run check` runs Cargo on this host, with your toolchain and your `target/`;
-`azad run --isolated check`, as in CI, runs the same commands in the Rust image.
+`azad run --isolated check`, as in CI, runs the same commands in Azad's image.
 """
 
-# CircleCI's Rust image, because it has rustfmt and clippy, which the official image does not. In the image, rustup and
-# Cargo have no home, the image's Cargo home is read-only, and rustup must ignore rust-toolchain.toml, which asks for
-# a musl target that the read-only image cannot install. Without incremental builds and with less debug information,
-# the build that CI keeps (decision 0017) stays small. On the host, none of this applies.
+# Azad's image (decision 0037): CircleCI's Rust image, because it has rustfmt and clippy, which the official image does
+# not, with bubblewrap, so that the sandbox tests start sandboxes inside Azad's sandbox. `dev/ci/Dockerfile` makes it,
+# and the workflow `CI image` publishes it. In the image, rustup and Cargo have no home, the image's Cargo home is
+# read-only, and rustup uses the image's toolchain, which it cannot change. Without incremental builds and with less
+# debug information, the build that CI keeps (decision 0017) stays small. On the host, none of this applies.
 CARGO_HOME = "/tmp/cargo-home"
 RUST = image(
-    "cimg/rust:1.99.1@sha256:bc990fa20ef4af5b0e09c061000b84d873a5bc2900bb00235ff6346e3f86f3f5",
+    "ghcr.io/badliveware/azad-ci:8b83ed025c80@sha256:27e9c37c03c3095198ab15f7e4a7794decb6082bf6813602033d1063d5de8ff5",
     env = {
         "HOME": "/tmp/home",
         "RUSTUP_HOME": "/home/circleci/.rustup",
@@ -49,9 +50,9 @@ SOURCES = [
     "action/cargo-matcher.json",
 ]
 
-# The integration tests that need no sandbox, and those that do: the sandbox tests start bubblewrap, which needs nested
-# user namespaces inside Azad's own sandbox, so they run on the host. One Cargo command builds each dependency once; two that select packages differently can
-# build a dependency twice, with other features.
+# The integration tests that need no sandbox, and those that do: the sandbox tests start bubblewrap, on the host or, in
+# the image, inside Azad's own sandbox. One Cargo command builds each dependency once; two that select packages
+# differently can build a dependency twice, with other features.
 SANDBOX_FREE_TESTS = ["sandbox_free", "jobs", "parts"]
 SANDBOX_TESTS = ["sandboxed", "cli"]
 
@@ -88,8 +89,10 @@ sandbox_tests = task(
     name = "sandbox-tests",
     cmd = cargo_command("cargo test --workspace --locked " + " ".join(["--test " + name for name in SANDBOX_TESTS])),
     sources = SOURCES + ["dev/**"],
+    image = RUST,
+    network = True,
     caches = cargo_caches("sandbox-tests"),
-    doc = "Run the tests that start sandboxes, on the host, which needs bubblewrap",
+    doc = "Run the tests that start sandboxes, which need bubblewrap",
 )
 
 examples = task(
@@ -97,18 +100,19 @@ examples = task(
     cmd = cargo_command("dev/check-examples.sh"),
     sources = SOURCES + ["dev/**", "examples/**", "std/**", ".github/workflows/*-example.yml"],
     exclude = ["examples/*/rootfs/**"],
+    image = RUST,
+    network = True,
     caches = cargo_caches("examples"),
-    doc = "Run every example twice, on the host: the second run must run nothing",
+    doc = "Run every example twice: the second run must run nothing",
 )
 
-goal("check", require = [fmt, clippy, test, sandbox_tests], doc = "Check a change; CI runs it, and the examples next to it")
+goal("check", require = [fmt, clippy, test, sandbox_tests], doc = "Check a change")
 
-# The orchestrator runs only isolated tasks, because an event runs code that someone else wrote, so this goal leaves out
-# the sandbox tests and the examples. In CI, this commit's own orchestrator runs it for each push and pull request, as it
-# would for a webhook, next to `//:check` (decision 0036).
+# The orchestrator runs this for each push and pull request. In CI, this commit's own orchestrator runs it, as it would
+# for a webhook, next to stage 0's `//:check` and `//:examples` (decisions 0036 and 0037).
 goal(
-    "isolated-check",
-    require = [fmt, clippy, test],
+    "ci",
+    require = [fmt, clippy, test, sandbox_tests, examples],
     on = ["push", "pull_request"],
-    doc = "The part of check that runs isolated, which the orchestrator runs for each push and pull request",
+    doc = "What CI checks: the checks of a change, and the examples",
 )
