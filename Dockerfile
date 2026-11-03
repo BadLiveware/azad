@@ -2,6 +2,7 @@
 # Azad's release (decision 0029): static binaries, an image that holds only azad, and an image to run azad in.
 #   docker build --target dist --output type=local,dest=dist .   every binary, in dist/
 #   docker build --target bin .                                  an image to copy azad from
+#   docker build --target site --output type=local,dest=site .   the site's server and its files, in site/
 #   docker build .                                               an image to run azad in
 
 # Alpine's C library is musl, so the C code that ring and blake3 compile links statically, as Rust does.
@@ -23,6 +24,28 @@ EOF
 
 FROM scratch AS dist
 COPY --from=build /out/ /
+
+# The site (decision 0034): its server, static for musl as the others, and the browser's half, which cargo-leptos
+# builds as WebAssembly. Its files go in site/, which LEPTOS_SITE_ROOT names when it runs.
+#   docker build --target site --output type=local,dest=site .
+FROM rust:1.99.1-alpine@sha256:7e9e2d068a107a2adafd19930011178d14a78326053cd4c3a9f7ad3fd049557d AS site-build
+ENV RUSTUP_TOOLCHAIN=1.99.1 \
+    CARGO_PROFILE_RELEASE_STRIP=symbols
+RUN rustup target add wasm32-unknown-unknown && cargo install --locked cargo-leptos --version 0.3.11
+ARG AZAD_VERSION
+WORKDIR /src
+COPY . .
+RUN --mount=type=cache,id=azad-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=azad-site-target,target=/src/target <<-EOF
+	set -eu
+	cargo leptos build --release
+	mkdir -p /out/site
+	cp target/release/azad-site /out/
+	cp -r target/site/. /out/site/
+EOF
+
+FROM scratch AS site
+COPY --from=site-build /out/ /
 
 FROM scratch AS bin
 COPY --from=build /out/azad /azad

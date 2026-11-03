@@ -1,0 +1,18 @@
+[Unit]
+Description=Azad's site: the orchestrator's runs, their steps and their output
+After=network-online.target opt-azad.mount
+Wants=network-online.target
+
+[Service]
+User=azad
+Environment=AZAD_ORCHESTRATOR_STATE=/var/lib/azad/orchestrator
+Environment=LEPTOS_OUTPUT_NAME=azad-site
+Environment=LEPTOS_SITE_ROOT=/opt/azad/web/site
+Environment=LEPTOS_SITE_PKG_DIR=pkg
+Environment=LEPTOS_SITE_ADDR=0.0.0.0:8485
+Environment=LEPTOS_ENV=PROD
+ExecStart=/opt/azad/web/azad-site
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

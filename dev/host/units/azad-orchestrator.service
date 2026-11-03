@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 User=azad
 EnvironmentFile=/etc/azad/orchestrator.env
-ExecStart=/opt/azad/bin/azad-orchestrator --store /var/lib/azad serve --github-app-id ${AZAD_GITHUB_APP_ID} --github-app-key /etc/azad/app.pem
+ExecStart=/opt/azad/bin/azad-orchestrator --store /var/lib/azad serve --github-app-id ${AZAD_GITHUB_APP_ID} --github-app-key /etc/azad/app.pem --site-url http://127.0.0.1:8485
 StateDirectory=azad
 Restart=on-failure
 

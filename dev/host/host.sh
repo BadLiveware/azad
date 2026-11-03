@@ -21,6 +21,8 @@ readonly RELAY_ARCHIVE=gosmee_${RELAY_VERSION}_linux_x86_64.tar.gz
 readonly RELAY_URL=https://github.com/chmouel/gosmee/releases/download/v$RELAY_VERSION/$RELAY_ARCHIVE
 readonly RELAY_SHA256=69e5d2593022f0cd30cc38304863b94a39e5cf42631763b9e7969e563be4e389
 readonly SSH_PORT=2222
+# The site (decision 0034), which the VM serves and the host forwards to its own loopback.
+readonly SITE_PORT=8485
 readonly SEED_PORT=8642
 readonly USER_NAME=azad
 readonly SHARE_TAG=azad
@@ -85,12 +87,28 @@ seed() {
     : > "$state/seed/vendor-data"
 }
 
+# Names in the namespace resolve through slirp4netns's resolver, because the host's resolver may be on its loopback,
+# which the namespace does not reach. When /etc/resolv.conf links to a file elsewhere, such as systemd-resolved's stub,
+# a directory of our own covers that file's directory: the host replaces the file by renaming a new one into place,
+# which would leave a bind mount of the file on the old one.
+resolve_through_slirp() {
+    local target
+    target=$(readlink -f /etc/resolv.conf)
+    if [ "$target" = /etc/resolv.conf ]; then
+        echo "nameserver $RESOLVER" > "$state/resolv.conf"
+        mount --bind "$state/resolv.conf" /etc/resolv.conf
+        return
+    fi
+    rm -rf "$state/resolver"
+    mkdir -p "$state/resolver"
+    echo "nameserver $RESOLVER" > "$state/resolver/$(basename "$target")"
+    mount --bind "$state/resolver" "$(dirname "$target")"
+}
+
 # Runs in new user, network and mount namespaces: waits for slirp4netns, closes the network to all but the internet,
-# serves the seed to the VM, and becomes the VM. The host's resolver may be on its loopback, which the namespace does
-# not reach, so names resolve through slirp4netns's resolver.
+# serves the seed to the VM, and becomes the VM.
 inside() {
-    echo "nameserver $RESOLVER" > "$state/resolv.conf"
-    mount --bind "$state/resolv.conf" /etc/resolv.conf
+    resolve_through_slirp
     ip link set lo up
     for _ in $(seq 100); do
         ip route | grep -q '^default' && break
@@ -103,7 +121,7 @@ inside() {
         -name azad-host -machine q35,accel=kvm -cpu host -smp "$cpus" -m "$memory" \
         -display none -serial "file:$state/console.log" \
         -drive "file=$state/disk.qcow2,if=virtio,format=qcow2" \
-        -nic "user,model=virtio-net-pci,hostfwd=tcp::$SSH_PORT-:22" \
+        -nic "user,model=virtio-net-pci,hostfwd=tcp::$SSH_PORT-:22,hostfwd=tcp::$SITE_PORT-:$SITE_PORT" \
         -smbios "type=1,serial=ds=nocloud;s=http://10.0.2.2:$SEED_PORT/" \
         -virtfs "local,path=$state/share,mount_tag=$SHARE_TAG,security_model=none,readonly=on"
 }
@@ -132,8 +150,10 @@ up() {
         [ -S "$state/slirp.sock" ] && break
         sleep 0.1
     done
-    local forward="{\"execute\": \"add_hostfwd\", \"arguments\": {\"proto\": \"tcp\", \"host_addr\": \"127.0.0.1\", \"host_port\": $SSH_PORT, \"guest_addr\": \"$NAMESPACE_ADDRESS\", \"guest_port\": $SSH_PORT}}"
-    echo "$forward" | socat - "UNIX-CONNECT:$state/slirp.sock" | grep -q '"return"' || fail "slirp4netns did not forward SSH"
+    for port in "$SSH_PORT" "$SITE_PORT"; do
+        local forward="{\"execute\": \"add_hostfwd\", \"arguments\": {\"proto\": \"tcp\", \"host_addr\": \"127.0.0.1\", \"host_port\": $port, \"guest_addr\": \"$NAMESPACE_ADDRESS\", \"guest_port\": $port}}"
+        echo "$forward" | socat - "UNIX-CONNECT:$state/slirp.sock" | grep -q '"return"' || fail "slirp4netns did not forward port $port"
+    done
     echo "host.sh: booting; the first boot installs packages (console: $state/console.log)"
     local start=$SECONDS
     until host_ssh cloud-init status --wait > /dev/null 2>&1; do
@@ -174,17 +194,20 @@ relay() {
     rm "$state/$RELAY_ARCHIVE"
 }
 
-# The binaries of the working tree, built static as a release builds them, in the VM's /opt/azad/bin, and the relay's
-# client in /opt/azad/relay.
+# The binaries of the working tree, built static as a release builds them, in the VM's /opt/azad/bin; the site, with
+# its files, in /opt/azad/web; and the relay's client in /opt/azad/relay.
 deploy() {
     local version
     version="dev-$(git -C "$repo" rev-parse --short HEAD)"
     docker build --target dist --build-arg "AZAD_VERSION=$version" --output "type=local,dest=$state/share/bin" "$repo"
+    rm -rf "$state/share/web"
+    docker build --target site --build-arg "AZAD_VERSION=$version" --output "type=local,dest=$state/share/web" "$repo"
     relay
     rm -rf "$state/share/units" && cp -r "$here/units" "$state/share/units"
+    chmod -R a+rX "$state/share"
     if running; then
         host_ssh 'sudo cp /opt/azad/units/*.service /etc/systemd/system/ && sudo systemctl daemon-reload &&
-            sudo systemctl try-restart azad-orchestrator azad-relay'
+            sudo systemctl try-restart azad-orchestrator azad-relay azad-site'
     fi
     echo "host.sh: deployed $version"
 }
@@ -195,7 +218,7 @@ status() {
         return
     fi
     echo "host.sh: the host runs (pid $(cat "$state/vm.pid")), state in $state"
-    host_ssh 'uptime; ls /opt/azad/bin 2>/dev/null; systemctl is-active azad-orchestrator azad-relay || true'
+    host_ssh 'uptime; ls /opt/azad/bin 2>/dev/null; systemctl is-active azad-orchestrator azad-relay azad-site || true'
 }
 
 case "${1:-}" in
