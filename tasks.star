@@ -52,7 +52,7 @@ SOURCES = [
 # The integration tests that need no sandbox, and those that do: the sandbox tests start bubblewrap, which needs nested
 # user namespaces inside Azad's own sandbox, so they run on the host. One Cargo command builds each dependency once; two that select packages differently can
 # build a dependency twice, with other features.
-SANDBOX_FREE_TESTS = ["ir", "store", "eval", "compile", "reference", "jobs", "parts", "versions", "patterns", "project", "yaml"]
+SANDBOX_FREE_TESTS = ["ir", "store", "eval", "compile", "reference", "jobs", "parts", "versions", "patterns", "project", "yaml", "ecosystems"]
 SANDBOX_TESTS = ["exec", "run", "engine", "tasks", "remote", "modules", "cli", "vm", "orchestrator"]
 
 fmt = task(

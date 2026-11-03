@@ -58,6 +58,7 @@ Smaller items; each one is done when the monorepo no longer needs its workaround
 - A `config.star` that extends a value of its parent, not only replaces it.
 - Modules that give a task its own list of dependencies, not only the package's.
 - A check that a task's declared sources hold what it reads, from a trace in the sandbox, so that declarations cannot drift from what the tools read.
+  Dependencies can now come from project files (decision 0031): `.csproj`, uv `pyproject.toml` and `package.json`, so `package(deps = ...)` does not drift from them; the sources of a task can still drift.
 
 ### 4. Hosts
 

@@ -35,3 +35,4 @@ A decision is not edited after it is made; a later decision replaces it and says
 | [0028](0028-dependency-graph.md) | A dependency graph that each package declares, as coarse or as fine as it needs | Accepted, 2026-11-02 |
 | [0029](0029-one-binary-for-each-kind-of-user.md) | One binary for each kind of user | Accepted, 2026-11-03 |
 | [0030](0030-azad-releases-itself.md) | Azad releases itself | Accepted, 2026-11-03 |
+| [0031](0031-project-files-and-ecosystem-modules.md) | Built-ins that read project files, and ecosystem modules in the standard library | Accepted, 2026-11-03 |

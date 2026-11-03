@@ -14,6 +14,7 @@ _ROLE_DOCS = {
     "typecheck": "Check the types",
     "test": "Run the tests",
     "build": "Build",
+    "pack": "Make the packages",
 }
 
 def part(ci = [], **roles):

@@ -30,7 +30,11 @@ const STAR_EXTENSION: &str = ".star";
 /// The standard library's modules are part of Azad, so their version is Azad's version.
 const STD_PREFIX: &str = "@std//";
 const STD_MODULES: &[(&str, &str)] = &[
+    ("dotnet.star", include_str!("../../../std/dotnet.star")),
+    ("node.star", include_str!("../../../std/node.star")),
+    ("paths.star", include_str!("../../../std/paths.star")),
     ("project.star", include_str!("../../../std/project.star")),
+    ("python.star", include_str!("../../../std/python.star")),
     ("test.star", include_str!("../../../std/test.star")),
     ("version.star", include_str!("../../../std/version.star")),
 ];

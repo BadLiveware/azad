@@ -41,6 +41,7 @@ The word itself is *āzād* (آزاد), "free" in Persian, Kurdish, Urdu and Hin
 - Images from a registry, pinned by digest, or built from a Dockerfile of the repository.
 - Many packages in one repository: `azad run fmt` at the root runs every package's `fmt`, tags and personal defaults choose what runs, and each package declares its immediate dependencies.
 - Modules that return parts, so a project's goals come from the parts that it chooses (`@std//project.star`).
+- Dependencies from project files: `@std//dotnet.star`, `@std//python.star` and `@std//node.star` read a `.csproj`, a uv `pyproject.toml` or a `package.json`, and give `package(deps = ...)`; .NET also has standard parts.
 - Lower-level actions, which always run in their image, for steps that must be hermetic everywhere.
 - Cache volumes, so a tool such as Cargo keeps its incremental state between runs.
 - Simple GHA workflows, run without a change: `run:` steps, `actions/checkout`, `setup-*` actions, matrices, job outputs and artifacts.
