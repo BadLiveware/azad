@@ -151,7 +151,7 @@ fn outputs_must_be_declared_and_made() {
     let undeclared = action(&f, Kind::Hermetic, "mkdir -p out stray/deep && touch note", &["out"]);
     let run = f.executor.execute(&undeclared).unwrap();
     assert!(run.result.succeeded(), "undeclared paths do not fail the action");
-    assert_eq!(run.discarded, ["note", "stray"]);
+    assert_eq!(run.discarded, ["note", "stray/"]);
     assert!(f.executor.execute(&undeclared).unwrap().discarded.is_empty(), "a cache hit discards nothing");
     let missing = action(&f, Kind::Hermetic, "true", &["out"]);
     assert!(matches!(f.executor.execute(&missing), Err(ExecError::MissingOutput(p)) if p == "out"));

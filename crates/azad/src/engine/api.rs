@@ -671,6 +671,28 @@ impl Engine {
         Ok(graph)
     }
 
+    /// `progress`, without the paths that an action left undeclared and that the workspace's git ignores, such as the
+    /// `bin/` and `obj/` of a build: they are the expected scratch of the project's tools, not a mistake to report. A
+    /// diagnostic note still counts them, because a forgotten output, such as `dist/`, is often ignored too.
+    fn without_ignored_scratch(&self, progress: Progress) -> (Progress, Option<String>) {
+        let Progress::Done { name, status: Status::Ran { action, result, discarded } } = progress else {
+            return (progress, None);
+        };
+        let ignored = match discarded.is_empty() {
+            true => BTreeSet::new(),
+            false => crate::engine::git::ignored(&self.config.root, &discarded).unwrap_or_default(),
+        };
+        let note = ignored.first().map(|first| {
+            format!(
+                "{name}: discarded {} that git ignores, such as {first}; declare the ones that other tasks read as \
+                 outputs",
+                count(ignored.len(), "path")
+            )
+        });
+        let discarded = discarded.into_iter().filter(|path| !ignored.contains(path)).collect();
+        (Progress::Done { name, status: Status::Ran { action, result, discarded } }, note)
+    }
+
     /// Runs what the goal needs, and records the run.
     pub fn run(
         &self,
@@ -679,7 +701,13 @@ impl Engine {
         observe: &mut dyn FnMut(Event),
     ) -> Result<RunReport, EngineError> {
         let runner = Runner::new(&goal.graph, self.backend.as_ref(), parallelism);
-        let outcome = runner.run(&goal.key, &mut |progress| observe(Event::Progress(progress)))?;
+        let outcome = runner.run(&goal.key, &mut |progress| {
+            let (progress, note) = self.without_ignored_scratch(progress);
+            observe(Event::Progress(progress));
+            if let Some(text) = note {
+                observe(Event::Note(Note { level: NoteLevel::Diagnostic, text }));
+            }
+        })?;
         if let Some(text) = missing_host_tools(goal, &outcome) {
             observe(Event::Note(Note { level: NoteLevel::Normal, text }));
         }

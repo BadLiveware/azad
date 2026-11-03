@@ -216,6 +216,8 @@ impl LocalBackend {
         for (path, tree) in &action.work {
             self.store.merge_into(tree, &work.join(path))?;
         }
+        let dir = work.join(&action.dir);
+        fs::create_dir_all(&dir).map_err(|source| ExecError::Io { path: dir, error: source })?;
         let placed = relative_paths(&work)?;
         let timer = self.timings.start(format!("place the files of the root, {}", tree_name(&action.root)));
         let root = self.store.materialize(&action.root)?;
@@ -407,7 +409,7 @@ fn outputs_in_place(store: &Store, workspace: &Path, result: &ActionResult) -> R
 
 /// The entries of the work directory that are neither a declared output nor a directory on the way to one, and that
 /// the action made: entries that `placed` names were there when it started. An undeclared directory is reported once,
-/// not with its content.
+/// not with its content, and ends with `/`, as git's ignore rules name directories.
 fn undeclared_paths(
     work: &Path,
     outputs: &BTreeSet<String>,
@@ -466,7 +468,10 @@ fn collect_undeclared(
         match (is_dir && (leads_to_output || was_placed), was_placed) {
             (true, _) => collect_undeclared(&entry.path(), &relative, outputs, placed, found)?,
             (false, true) => {}
-            (false, false) => found.push(relative),
+            (false, false) => found.push(match is_dir {
+                true => format!("{relative}/"),
+                false => relative,
+            }),
         }
     }
     Ok(())

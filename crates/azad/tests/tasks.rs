@@ -543,3 +543,35 @@ fn a_pull_request_does_not_build_an_image_from_a_dockerfile() {
     let error = engine.load("//app:check", &mut |_| {}).unwrap_err().to_string();
     assert!(error.contains("a run of a pull request does not build images from Dockerfiles"), "{error}");
 }
+
+/// What an isolated action leaves undeclared is reported, except what the workspace's git ignores, such as the `bin/`
+/// of a build: that is the expected scratch of the project's tools.
+#[test]
+fn undeclared_paths_that_git_ignores_are_not_reported() {
+    let dir = TempDir::new().unwrap();
+    let workspace = workspace(&dir);
+    init_git(&workspace);
+    fs::write(workspace.join(".gitignore"), "bin/\n*.log\n").unwrap();
+    let tool = workspace.join("tool");
+    fs::create_dir_all(&tool).unwrap();
+    let tasks = format!(
+        "task(name = \"scratch\", cmd = \"mkdir -p bin obj && touch bin/app.dll build.log stray.txt\", image = image({IMAGE:?}))\n"
+    );
+    fs::write(tool.join("tasks.star"), tasks).unwrap();
+    let engine = engine(&dir, true);
+    let goal = engine.load("//tool:scratch", &mut |_| {}).unwrap();
+    let mut discarded = Vec::new();
+    let mut notes = Vec::new();
+    engine
+        .run(&goal, 1, &mut |event| match event {
+            Event::Progress(Progress::Done { status: Status::Ran { discarded: paths, .. }, .. }) => {
+                discarded.extend(paths);
+            }
+            Event::Note(note) => notes.push(note.text),
+            _ => {}
+        })
+        .unwrap();
+    assert_eq!(discarded, ["tool/obj/", "tool/stray.txt"]);
+    let counted = "//tool:scratch: discarded 2 paths that git ignores, such as tool/bin/";
+    assert!(notes.iter().any(|note| note.starts_with(counted)), "a diagnostic note counts them: {notes:?}");
+}
