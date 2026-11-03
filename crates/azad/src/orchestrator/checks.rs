@@ -42,6 +42,9 @@ pub struct CheckRun {
     /// The output of the steps, in Markdown.
     #[serde(default)]
     pub text: String,
+    /// The run's page on the site.
+    #[serde(default)]
+    pub details_url: Option<String>,
 }
 
 /// What a check run shows, as GitHub's `output`: a title, a summary and a text, in Markdown.
@@ -78,8 +81,8 @@ impl fmt::Display for CheckRun {
 
 /// Where check runs go.
 pub trait CheckRuns: Send + Sync + fmt::Debug {
-    /// Creates a queued check run, and returns its ID.
-    fn create(&self, repository: &str, head_sha: &str, name: &str) -> io::Result<u64>;
+    /// Creates a queued check run, which links to `details_url` when there is one, and returns its ID.
+    fn create(&self, repository: &str, head_sha: &str, name: &str, details_url: Option<&str>) -> io::Result<u64>;
     fn update(
         &self,
         repository: &str,
@@ -133,7 +136,7 @@ impl FakeGitHub {
 }
 
 impl CheckRuns for FakeGitHub {
-    fn create(&self, repository: &str, head_sha: &str, name: &str) -> io::Result<u64> {
+    fn create(&self, repository: &str, head_sha: &str, name: &str, details_url: Option<&str>) -> io::Result<u64> {
         fs::create_dir_all(&self.dir)?;
         let mut id = self.check_runs()?.last().map_or(1, |run| run.id + 1);
         loop {
@@ -153,6 +156,7 @@ impl CheckRuns for FakeGitHub {
             title: String::new(),
             summary: String::new(),
             text: String::new(),
+            details_url: details_url.map(str::to_owned),
         };
         self.write(&run)?;
         Ok(id)

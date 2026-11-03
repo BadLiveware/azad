@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 
 use crate::orchestrator::event::Event;
 
-const RUNS_DIR: &str = "runs";
+pub(super) const RUNS_DIR: &str = "runs";
 const DELIVERIES_DIR: &str = "deliveries";
-const EVENT_FILE: &str = "event.json";
+pub(super) const EVENT_FILE: &str = "event.json";
 const CHECKS_FILE: &str = "checks.json";
-const DONE_FILE: &str = "done";
+pub(super) const DONE_FILE: &str = "done";
 const ID_WIDTH: usize = 10;
 
 #[derive(Debug)]
@@ -94,7 +94,7 @@ impl Runs {
         write_file(&self.run_dir(id).join(CHECKS_FILE), &serde_json::to_vec_pretty(checks).map_err(io::Error::other)?)
     }
 
-    fn run_dir(&self, id: u64) -> PathBuf {
+    pub(super) fn run_dir(&self, id: u64) -> PathBuf {
         self.dir.join(RUNS_DIR).join(format!("{id:0ID_WIDTH$}"))
     }
 

@@ -52,6 +52,10 @@ enum OrchestratorCommand {
         /// GitHub's REST API.
         #[arg(long, default_value = GITHUB_API)]
         github_api: String,
+        /// Where `azad-site` shows the runs, such as http://127.0.0.1:8485, so that each check run links to its run's
+        /// page (decision 0034).
+        #[arg(long)]
+        site_url: Option<String>,
     },
     /// Send an event from the workspace's git repository to `serve`, as GitHub would, signed with the secret in
     /// $AZAD_WEBHOOK_SECRET.
@@ -94,12 +98,12 @@ fn run(cli: Cli) -> Result<()> {
     let mut config = EngineConfig::from_environment(cli.store, cli.root)?;
     config.executor = cli.executor;
     match cli.command {
-        OrchestratorCommand::Serve { listen, github_app_id, github_app_key, github_api } => {
+        OrchestratorCommand::Serve { listen, github_app_id, github_app_key, github_api, site_url } => {
             let app = match (github_app_id, github_app_key) {
                 (Some(id), Some(key)) => Some(github_app(&id, &key, &github_api)?),
                 _ => None,
             };
-            serve(config, &listen, app)
+            serve(config, &listen, app, site_url.as_deref())
         }
         OrchestratorCommand::Simulate { event: SimulatedEvent::Push { branch }, server, default_branch } => {
             let branch = branch_or_current(&config, branch)?;
@@ -138,7 +142,7 @@ fn github_app(id: &str, key: &Path, api: &str) -> Result<GitHubApp> {
     Ok(GitHubApp::new(id, &pem, api)?)
 }
 
-fn serve(config: EngineConfig, listen: &str, app: Option<GitHubApp>) -> Result<()> {
+fn serve(config: EngineConfig, listen: &str, app: Option<GitHubApp>, site_url: Option<&str>) -> Result<()> {
     let secret = webhook_secret()?;
     let listener = TcpListener::bind(listen).with_context(|| format!("listening on {listen}"))?;
     eprintln!("azad-orchestrator: webhooks to http://{}{}", listener.local_addr()?, orchestrator::WEBHOOK_PATH);
@@ -148,6 +152,10 @@ fn serve(config: EngineConfig, listen: &str, app: Option<GitHubApp>) -> Result<(
             Orchestrator::with_github(config, &secret, app)
         }
         None => Orchestrator::new(config, &secret),
+    };
+    let orchestrator = match site_url {
+        Some(url) => orchestrator.with_site(url),
+        None => orchestrator,
     };
     orchestrator.serve(&listener)?;
     Ok(())

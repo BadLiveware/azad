@@ -11,7 +11,8 @@ mod event;
 mod git;
 mod github;
 mod http;
-mod report;
+pub mod record;
+pub mod report;
 mod runs;
 mod signature;
 mod simulate;
@@ -31,7 +32,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::engine::{Engine, EngineConfig, Status};
+use crate::engine::{Engine, EngineConfig};
 use crate::ir::Kind;
 
 use crate::trust::Trust;
@@ -71,6 +72,8 @@ pub struct Orchestrator {
     checks: Box<dyn CheckRuns>,
     /// The App that writes check runs on GitHub and fetches its repositories; none for the fake GitHub.
     github: Option<Arc<GitHubApp>>,
+    /// Where the site shows the runs, such as `http://127.0.0.1:8485`, so that check runs link to their run's page.
+    site: Option<String>,
     new_events: (Mutex<bool>, Condvar),
 }
 
@@ -83,6 +86,7 @@ impl Orchestrator {
         Orchestrator {
             checks: Box::new(fake_github(&store)),
             github: None,
+            site: None,
             runs: runs::Runs::new(&state),
             state,
             engine,
@@ -95,6 +99,11 @@ impl Orchestrator {
     pub fn with_github(engine: EngineConfig, secret: &[u8], app: GitHubApp) -> Self {
         let app = Arc::new(app);
         Orchestrator { checks: Box::new(app.clone()), github: Some(app), ..Orchestrator::new(engine, secret) }
+    }
+
+    /// Check runs link to their run's page on the site at `url` (decision 0034).
+    pub fn with_site(self, url: &str) -> Self {
+        Orchestrator { site: Some(url.trim_end_matches('/').to_owned()), ..self }
     }
 
     /// Takes deliveries on `listener`, and runs what they ask for, until the listener fails. Runs that were not done
@@ -185,6 +194,12 @@ impl Orchestrator {
     fn process(&self, id: u64, event: &Event) {
         if let Err(e) = self.try_process(id, event) {
             eprintln!("azad-orchestrator: run {id} failed: {e}");
+            let failed =
+                record::Entry { at: record::now(), event: record::RecordEvent::RunFailed { reason: e.clone() } };
+            if let Err(e) = record::Recorder::open(&self.runs.run_dir(id)).and_then(|mut record| record.append(&failed))
+            {
+                eprintln!("azad-orchestrator: the failure of run {id} cannot be recorded: {e}");
+            }
             if let Ok(Some(checks)) = self.runs.checks(id) {
                 for check in checks.values() {
                     let output = CheckOutput::line("The orchestrator could not run the goal", &e);
@@ -223,10 +238,14 @@ impl Orchestrator {
             force: false,
             ..self.engine.clone()
         };
+        let mut recorder = record::Recorder::open(&self.runs.run_dir(id)).map_err(|e| e.to_string())?;
+        let started = record::RecordEvent::RunStarted { trust: config.trust };
+        recorder.append(&record::Entry { at: record::now(), event: started }).map_err(|e| e.to_string())?;
         let engine = Engine::new(config).map_err(|e| e.to_string())?;
         let checks = self.check_runs(id, event, &engine)?;
         for (goal, check) in &checks {
-            let (conclusion, output) = self.run_goal(&engine, goal, repository, *check)?;
+            let target = GoalTarget { name: goal, repository, check: *check };
+            let (conclusion, output) = self.run_goal(&engine, &target, &mut recorder)?;
             self.checks
                 .update(repository, *check, CheckStatus::Completed, Some(conclusion), &output)
                 .map_err(|e| e.to_string())?;
@@ -234,56 +253,75 @@ impl Orchestrator {
         Ok(())
     }
 
-    /// Runs a goal, shows its steps on its check run while it runs, and says how it ended.
+    /// Runs a goal, records what happens, shows its steps on its check run while it runs, and says how it ended.
     fn run_goal(
         &self,
         engine: &Engine,
-        target: &str,
-        repository: &str,
-        check: u64,
+        target: &GoalTarget<'_>,
+        recorder: &mut record::Recorder,
     ) -> Result<(Conclusion, CheckOutput), String> {
         let started = CheckOutput::line("Starting", "The goal is loaded and its steps are found.");
-        self.checks.update(repository, check, CheckStatus::InProgress, None, &started).map_err(|e| e.to_string())?;
-        let goal = match engine.load(target, &mut |_| {}) {
-            Ok(goal) => goal,
-            Err(e) => return Ok((Conclusion::Failure, CheckOutput::line("The goal cannot be loaded", &e.to_string()))),
+        self.show(target, &started);
+        let loaded = engine.load(target.name, &mut |_| {});
+        let actions: Vec<String> = match &loaded {
+            Ok(goal) => goal.graph.actions.keys().cloned().collect(),
+            Err(_) => Vec::new(),
         };
-        if let Some(label) = goal.graph.actions.iter().find(|(_, action)| matches!(action.kind, Kind::Host { .. })) {
+        let mut goal = record::Goal::new(target.name, &actions, record::now());
+        let begun = record::RecordEvent::GoalStarted { goal: target.name.to_owned(), steps: actions };
+        append(recorder, &begun);
+        let result = match loaded {
+            Ok(loaded) => self.run_loaded(engine, &loaded, target, recorder, &mut goal),
+            Err(e) => (Conclusion::Failure, CheckOutput::line("The goal cannot be loaded", &e.to_string())),
+        };
+        let (conclusion, output) = result;
+        let ended =
+            record::RecordEvent::GoalEnded { goal: target.name.to_owned(), conclusion, title: output.title.clone() };
+        append(recorder, &ended);
+        Ok((conclusion, output))
+    }
+
+    fn run_loaded(
+        &self,
+        engine: &Engine,
+        loaded: &crate::engine::Goal,
+        target: &GoalTarget<'_>,
+        recorder: &mut record::Recorder,
+        goal: &mut record::Goal,
+    ) -> (Conclusion, CheckOutput) {
+        if let Some(label) = loaded.graph.actions.iter().find(|(_, action)| matches!(action.kind, Kind::Host { .. })) {
             let title = format!("{} would run with the host's tools", label.0);
             let reason = "The orchestrator runs actions only in sandboxes, because an event runs code that anyone who can \
                           push or open a pull request wrote. Give the task an image.";
-            return Ok((Conclusion::Failure, CheckOutput::line(&title, reason)));
+            return (Conclusion::Failure, CheckOutput::line(&title, reason));
         }
-        let mut report = report::GoalReport::new(goal.graph.actions.keys());
         let mut shown = Instant::now();
-        let ran = engine.run(&goal, PARALLELISM, &mut |event| {
+        let ran = engine.run(loaded, PARALLELISM, &mut |event| {
             let crate::engine::Event::Progress(progress) = &event else { return };
-            report.see(progress);
+            let entry = record::Entry { at: record::now(), event: record_event(target.name, progress) };
+            append(recorder, &entry.event);
+            goal.apply(entry.at, &entry.event);
             if shown.elapsed() >= PROGRESS_INTERVAL {
                 shown = Instant::now();
-                if let Err(e) = self.checks.update(repository, check, CheckStatus::InProgress, None, &report.output()) {
-                    eprintln!("azad-orchestrator: the progress of {target} cannot be shown: {e}");
-                }
+                self.show(target, &report::output(goal, record::now()));
             }
         });
         let outcome = match ran {
             Ok(ran) => ran.outcome,
-            Err(e) => return Ok((Conclusion::Failure, CheckOutput::line("The goal could not run", &e.to_string()))),
+            Err(e) => return (Conclusion::Failure, CheckOutput::line("The goal could not run", &e.to_string())),
         };
-        for (name, status) in &outcome.statuses {
-            let result = match status {
-                Status::Ran { result, .. } | Status::Failed { result: Some(result), .. } => result,
-                _ => continue,
-            };
-            if let Ok(output) = engine.output_of(result) {
-                report.set_output(name, &output);
-            }
-        }
         let conclusion = match outcome.goal_holds() {
             true => Conclusion::Success,
             false => Conclusion::Failure,
         };
-        Ok((conclusion, report.output()))
+        (conclusion, report::output(goal, record::now()))
+    }
+
+    /// Shows a running goal's output on its check run; a failure to show it does not stop the goal.
+    fn show(&self, target: &GoalTarget<'_>, output: &CheckOutput) {
+        if let Err(e) = self.checks.update(target.repository, target.check, CheckStatus::InProgress, None, output) {
+            eprintln!("azad-orchestrator: the progress of {} cannot be shown: {e}", target.name);
+        }
     }
 
     /// The check run of each goal that the event runs: made once, and kept with the run, so that a run that starts
@@ -295,14 +333,44 @@ impl Orchestrator {
         let targets = engine.targets().map_err(|e| e.to_string())?;
         let mut checks = BTreeMap::new();
         for target in targets.into_iter().filter(|target| target.events.contains(event.kind.name())) {
+            let details = self.site.as_ref().map(|site| format!("{site}/runs/{id}"));
             let check = self
                 .checks
-                .create(&event.repository.full_name, &event.head_sha, &target.target)
+                .create(&event.repository.full_name, &event.head_sha, &target.target, details.as_deref())
                 .map_err(|e| e.to_string())?;
             checks.insert(target.target, check);
         }
         self.runs.set_checks(id, &checks).map_err(|e| e.to_string())?;
         Ok(checks)
+    }
+}
+
+/// A goal of a run, and its check run.
+struct GoalTarget<'a> {
+    name: &'a str,
+    repository: &'a str,
+    check: u64,
+}
+
+/// The event of the record that a run's progress gives.
+fn record_event(goal: &str, progress: &crate::scheduler::Progress) -> record::RecordEvent {
+    use crate::scheduler::Progress;
+    let goal = goal.to_owned();
+    match progress {
+        Progress::Started { name, .. } => record::RecordEvent::StepStarted { goal, step: name.clone() },
+        Progress::Log { name, line, .. } => record::RecordEvent::Line { goal, step: name.clone(), text: line.clone() },
+        Progress::Done { name, status } => {
+            let (state, reason) = record::StepState::of(status);
+            record::RecordEvent::StepEnded { goal, step: name.clone(), state, reason }
+        }
+    }
+}
+
+/// Appends an event to the run's record; a record that cannot be written does not stop the run.
+fn append(recorder: &mut record::Recorder, event: &record::RecordEvent) {
+    let entry = record::Entry { at: record::now(), event: event.clone() };
+    if let Err(e) = recorder.append(&entry) {
+        eprintln!("azad-orchestrator: the run's record cannot be written: {e}");
     }
 }
 

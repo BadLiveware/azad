@@ -1,5 +1,5 @@
 [toolchain]
 channel = "1.99.1"
 components = ["rustfmt", "clippy"]
-# The GHA runner is a static binary that runs inside any image.
-targets = ["x86_64-unknown-linux-musl"]
+# The GHA runner is a static binary that runs inside any image; the site's browser half is WebAssembly.
+targets = ["x86_64-unknown-linux-musl", "wasm32-unknown-unknown"]

@@ -403,9 +403,11 @@ fn a_check_run_shows_the_steps_metrics_and_the_output_of_a_failed_step() {
          goal(\"check\", require = [lint, broken]",
     );
     let sha = commit(&f.repo, &[("tasks.star", &tasks)], "a broken step");
-    f.serve();
+    let orchestrator = Orchestrator::new(f.config(f.dir.path(), Trust::Main), SECRET).with_site("http://site.test/");
+    f.serve_with(orchestrator);
     f.simulator(SECRET).push("main").unwrap();
     let check = f.completed(&sha).remove(0);
+    assert_eq!(check.details_url.as_deref(), Some("http://site.test/runs/1"), "the check run links to its run's page");
     assert_eq!(check.conclusion, Some(Conclusion::Failure));
     assert_eq!(check.title, "1 ran, 0 cached, 1 failed");
     let rows: Vec<&str> =
@@ -418,4 +420,34 @@ fn a_check_run_shows_the_steps_metrics_and_the_output_of_a_failed_step() {
     let lint = check.text.find("<details><summary>✅ <code>//:lint</code>").expect("the step that ran is folded");
     assert!(broken < lint, "the failed step comes first:\n{}", check.text);
     assert!(check.text.contains("compiling\nerror: a | b\n"), "{}", check.text);
+}
+
+/// The run's record holds what the check run shows, and the whole output of each step, for the site (decision 0034).
+#[test]
+fn a_run_s_record_holds_its_goals_steps_and_their_whole_output() {
+    let mut f = fixture();
+    let many = (1..=150).map(|n| format!("echo line {n};")).collect::<String>();
+    let tasks = TASKS.replace(
+        "goal(\"check\", require = [lint, build]",
+        &format!(
+            "long = task(name = \"long\", cmd = \"{many}\", image = IMAGE)\ngoal(\"check\", require = [lint, long]"
+        ),
+    );
+    let sha = commit(&f.repo, &[("tasks.star", &tasks)], "a long output");
+    f.serve();
+    f.simulator(SECRET).push("main").unwrap();
+    f.completed(&sha);
+    let state = azad::orchestrator::state_dir(&f.dir.path().join("store"));
+    let (_, dir) = azad::orchestrator::record::run_dirs(&state).unwrap().remove(0);
+    let run = azad::orchestrator::record::Run::read(&dir).unwrap();
+    assert_eq!(run.trust, Some(Trust::Main));
+    let goal = &run.goals[0];
+    assert_eq!(goal.name, "//:check");
+    assert_eq!(goal.conclusion, Some(Conclusion::Success));
+    let names: Vec<&str> = goal.steps.iter().map(|step| step.name.as_str()).collect();
+    assert_eq!(names, ["//:lint", "//:long"]);
+    let long = &goal.steps[1];
+    assert_eq!(long.lines, 150, "the record holds every line");
+    assert_eq!(long.tail.back().map(String::as_str), Some("line 150"));
+    assert!(long.started.is_some() && long.ended >= long.started);
 }

@@ -1,0 +1,68 @@
+[package]
+name = "azad-site"
+description = "The site of Azad's orchestrator: its runs, their steps and logs, in Leptos (decision 0034)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# The library is both halves: rendered on the server (`ssr`), and compiled to WebAssembly for the browser (`hydrate`).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "azad-site"
+path = "src/main.rs"
+required-features = ["ssr"]
+
+[features]
+default = ["ssr"]
+hydrate = ["leptos/hydrate", "dep:console_error_panic_hook", "dep:wasm-bindgen", "dep:web-sys", "dep:send_wrapper"]
+ssr = [
+    "dep:azad",
+    "dep:axum",
+    "dep:futures",
+    "dep:jiff",
+    "dep:leptos_axum",
+    "dep:tokio",
+    "leptos/ssr",
+    "leptos_meta/ssr",
+    "leptos_router/ssr",
+]
+
+[dependencies]
+leptos = "0.8.23"
+leptos_meta = "0.8.7"
+leptos_router = "0.8.17"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+azad = { version = "0.0.0", path = "../azad", optional = true }
+axum = { version = "0.8.9", optional = true }
+futures = { version = "0.3.31", optional = true }
+jiff = { version = "0.2.38", default-features = false, features = ["std"], optional = true }
+leptos_axum = { version = "0.8.10", optional = true }
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "time"], optional = true }
+
+console_error_panic_hook = { version = "0.1.7", optional = true }
+send_wrapper = { version = "0.6.0", optional = true }
+wasm-bindgen = { version = "0.2.130", optional = true }
+web-sys = { version = "0.3.107", features = ["EventSource", "MessageEvent"], optional = true }
+
+[package.metadata.leptos]
+output-name = "azad-site"
+site-root = "target/site"
+site-pkg-dir = "pkg"
+style-file = "style/main.css"
+site-addr = "127.0.0.1:8485"
+reload-port = 8486
+bin-features = ["ssr"]
+bin-default-features = false
+lib-features = ["hydrate"]
+lib-default-features = false
+env = "DEV"

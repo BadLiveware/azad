@@ -167,8 +167,11 @@ fn headers<B>(request: ureq::RequestBuilder<B>, token: &str) -> ureq::RequestBui
 }
 
 impl CheckRuns for Arc<GitHubApp> {
-    fn create(&self, repository: &str, head_sha: &str, name: &str) -> io::Result<u64> {
-        let body = json!({ "name": name, "head_sha": head_sha, "status": "queued" });
+    fn create(&self, repository: &str, head_sha: &str, name: &str, details_url: Option<&str>) -> io::Result<u64> {
+        let mut body = json!({ "name": name, "head_sha": head_sha, "status": "queued" });
+        if let Some(url) = details_url {
+            body["details_url"] = json!(url);
+        }
         let answer = self.installation_call(Method::Post, repository, "/check-runs", &body)?;
         answer.get("id").and_then(Value::as_u64).ok_or_else(|| io::Error::other(api_error("a check run", &answer)))
     }
