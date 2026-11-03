@@ -4,10 +4,14 @@ references, and the standard parts of a project for `@std//project.star`.
 The module reads MSBuild files as MSBuild evaluates them for an SDK-style project: the nearest `Directory.Build.props`
 at or above the project, the project file, and the nearest `Directory.Build.targets`, in that order, so that a later
 value replaces an earlier one. A `Directory.Build.props` or `Directory.Build.targets` can import the next one above it
-with `$([MSBuild]::GetPathOfFileAbove('<file>', '$(MSBuildThisFileDirectory)../'))`; an import of the SDK, or of a file
-of the MSBuild toolset (`$(MSBuildToolsPath)`, `$(MSBuildExtensionsPath)`, `$(MSBuildExtensionsPath32)`,
-`$(MSBuildBinPath)` or `$(VSToolsPath)`), adds no project of the workspace and is not read. Any other import is an
-error, because the module cannot know what it adds.
+with `$([MSBuild]::GetPathOfFileAbove('<file>', '$(MSBuildThisFileDirectory)../'))`. Any file can import another by
+its path, relative to the importing file as MSBuild resolves it, optionally after `$(MSBuildThisFileDirectory)`; an
+import of a file that does not exist adds nothing. An import of the SDK, or of a file of the MSBuild toolset
+(`$(MSBuildToolsPath)`, `$(MSBuildExtensionsPath)`, `$(MSBuildExtensionsPath32)`, `$(MSBuildBinPath)` or
+`$(VSToolsPath)`), adds no project of the workspace and is not read. An item below NuGet's folder of packages
+(`$(NuGetPackageRoot)`, `$(NuGetPackageFolders)`, or `$(Pkg<Name>)`) names no file of the workspace, and is left out.
+Any other import, such as one by a property or a
+wildcard, is an error, because the module cannot know what it adds.
 
 A value can use `$(Name)` of a property that these files set without a Condition, and `$(MSBuildThisFileDirectory)`,
 `$(MSBuildProjectDirectory)` and `$(MSBuildProjectName)`. A value that the module needs and cannot resolve, such as a
@@ -39,6 +43,9 @@ _TOOLSET_PROPERTIES = [
     "$(MSBuildBinPath)",
     "$(VSToolsPath)",
 ]
+# Properties that name NuGet's folder of packages, which is never in the workspace: an item below one names no file of
+# a package of the workspace. `$(Pkg<Name>)` is the folder of one package, from `GeneratePathProperty`.
+_PACKAGE_FOLDERS = ["$(NuGetPackageRoot)", "$(NuGetPackageFolders)", "$(Pkg"]
 _GROUPS = {"PropertyGroup": "property", "ItemGroup": "item"}
 _SCOPES = ["Choose", "When", "Otherwise", "ImportGroup"]
 
@@ -138,13 +145,27 @@ def _imported(file, element):
         if value.startswith(toolset):
             return None
     above = _path_of_file_above(file, value)
-    if above == None:
-        fail("%s: the module follows only an import of the next %s or %s above with GetPathOfFileAbove, so it " % (
+    if above != None:
+        return above.found
+    by_path = _import_by_path(file, value)
+    if by_path == None:
+        fail("%s: the module follows only an import by a path, or of the next %s or %s above with " % (
             _where(file, element),
             _PROPS,
             _TARGETS,
-        ) + "cannot know what this import adds; %s" % _BY_HAND)
-    return above.found
+        ) + "GetPathOfFileAbove, so it cannot know what this import adds; %s" % _BY_HAND)
+    return by_path.found
+
+def _import_by_path(file, value):
+    """The file that an import by a path reads: relative to `file`, optionally after `$(MSBuildThisFileDirectory)`, with
+    `found` None when it is not a file of the workspace. None when `value` is not a plain path."""
+    path = value.removeprefix(_THIS_FILE_DIRECTORY).replace("\\", "/")
+    if not path or "$" in path or "@" in path or "%" in path or "*" in path or "?" in path or path.startswith("/"):
+        return None
+    resolved = join(dirname(file), path)
+    if resolved == None or not files([resolved]):
+        return struct(found = None)
+    return struct(found = resolved)
 
 def _follow(start, state):
     """Adds the properties and items of `start`, and of the files that it imports, to `state`, in MSBuild's order."""
@@ -384,7 +405,7 @@ def _items(state, project):
         if entry.kind != "item" or tag in _NAME_ITEMS:
             continue
         include = _include(entry.element)
-        if include == None:
+        if include == None or _in_package_folder(include):
             continue
         where = _where(entry.file, entry.element)
         value = _expand(include, state["properties"], entry.file, project, where)
@@ -395,6 +416,10 @@ def _items(state, project):
             if item != None and (item.pattern, item.reference) not in found:
                 found[(item.pattern, item.reference)] = item
     return [found[key] for key in sorted(found.keys())]
+
+def _in_package_folder(include):
+    """Whether an item's Include starts in NuGet's folder of packages, outside the workspace."""
+    return len([folder for folder in _PACKAGE_FOLDERS if include.strip().startswith(folder)]) > 0
 
 def _references(state, project):
     """The projects that `project` references, as struct(path, where), sorted by path."""

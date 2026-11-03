@@ -190,9 +190,9 @@ fn dotnet_fails_and_says_why_when_it_cannot_know_a_dependency() {
             vec!["<ProjectReference Include=\"../../tools/Gen/Gen.csproj\">: no package holds //tools/Gen/Gen.csproj"],
         ),
         (
-            r#"<Project Sdk="Microsoft.NET.Sdk"><Import Project="..\..\build\common.props" /></Project>"#,
+            r#"<Project Sdk="Microsoft.NET.Sdk"><Import Project="$(RepoRoot)build\common.props" /></Project>"#,
             vec![
-                "//apps/api/Api.csproj: <Import Project=\"..\\..\\build\\common.props\">",
+                "//apps/api/Api.csproj: <Import Project=\"$(RepoRoot)build\\common.props\">",
                 "cannot know what this import adds",
             ],
         ),
@@ -473,4 +473,34 @@ goal("check", require = [use])
     assert_eq!(run(&engine), use_task("ran"));
     write(root, "libs/orders/src/Orders.TestBuilders/OrderBuilder.cs", "class OrderBuilder { int changed; }\n");
     assert_eq!(run(&engine), use_task("ran"));
+}
+
+/// An import by a plain path is read as MSBuild reads it, relative to the importing file, and adds what it names (an
+/// item in it is relative to the project, so a shared file starts its paths with `$(MSBuildThisFileDirectory)`); an
+/// import of a file that does not exist adds nothing; an item in NuGet's folder of packages names no file of the
+/// workspace, so it is neither a dependency nor an error.
+#[test]
+fn dotnet_follows_imports_by_path_and_leaves_out_nuget_s_folder() {
+    let dir = workspace(&[
+        (
+            "build/Shared.targets",
+            "<Project><ItemGroup><ProjectReference Include=\"$(MSBuildThisFileDirectory)../libs/core/Core.csproj\" /></ItemGroup></Project>",
+        ),
+        ("libs/core/tasks.star", ""),
+        ("libs/core/Core.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />"),
+        (
+            "apps/api/Api.csproj",
+            r#"<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\..\build\Shared.targets" />
+  <Import Project="$(MSBuildThisFileDirectory)missing.props" />
+  <ItemGroup>
+    <None Include="$(NuGetPackageRoot)some.package/1.0.0/lib/netstandard2.0/Some.dll" Link="Baseline/Some.dll" />
+    <None Include="$(PkgSome_Package)/tools/tool.exe" />
+  </ItemGroup>
+</Project>"#,
+        ),
+        ("apps/api/tasks.star", &format!("{DOTNET}\npackage(deps = dependencies(\"Api.csproj\"))\n")),
+    ]);
+    let package = evaluated(dir.path(), "apps/api").unwrap();
+    assert_eq!(package.declared.deps, ["//libs/core"]);
 }

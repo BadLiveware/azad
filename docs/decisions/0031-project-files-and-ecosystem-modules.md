@@ -55,6 +55,8 @@ Anything else is the user's to declare by hand, with `package(deps = ...)` and t
 
 For .NET, the module reads the nearest `Directory.Build.props`, the project file and the nearest `Directory.Build.targets`, in the order that MSBuild evaluates them.
 It follows an import of the next file above with `$([MSBuild]::GetPathOfFileAbove('<file>', '$(MSBuildThisFileDirectory)../'))`, and skips imports of the SDK and of the MSBuild toolset, which add no project of the workspace.
+It also follows an import by a plain path, relative to the importing file, optionally after `$(MSBuildThisFileDirectory)`; an import of a file that does not exist adds nothing.
+An item below NuGet's folder of packages (`$(NuGetPackageRoot)`, `$(NuGetPackageFolders)` or `$(Pkg<Name>)`) names no file of the workspace, and is left out.
 It resolves `$(Name)` of a property that these files set without a Condition, and `$(MSBuildThisFileDirectory)`, `$(MSBuildProjectDirectory)` and `$(MSBuildProjectName)`.
 It counts `ProjectReference` items, and the files that other items name outside the project's package, such as `<Compile Include="../../libs/orders/src/*.cs" />`; for a wildcard, the package of the directory before it and every package below that directory.
 Items whose Include is a name, such as `PackageReference`, name no file.
@@ -68,7 +70,7 @@ So the modules take the union: `ProjectReference` items and other items under ev
 ### Fail, do not guess
 
 When a module needs a value and cannot know it, it fails, and the message names the file and the element or entry, and says to declare the dependency by hand.
-Examples: a property that the SDK, the command line or the environment sets, a property function, a property that a Condition sets, another `<Import>`, a referenced project that no package holds, and a workspace member that does not exist.
+Examples: a property that the SDK, the command line or the environment sets, a property function, a property that a Condition sets, an `<Import>` by a property or a wildcard, a referenced project that no package holds, and a workspace member that does not exist.
 
 ## Consequences
 
