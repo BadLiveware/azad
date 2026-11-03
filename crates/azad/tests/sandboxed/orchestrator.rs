@@ -459,3 +459,153 @@ fn a_run_s_record_holds_its_goals_steps_and_their_whole_output() {
     assert_eq!(long.tail.back().map(String::as_str), Some("line 150"));
     assert!(long.started.is_some() && long.ended >= long.started);
 }
+
+/// Waits until `found` gives a value.
+fn wait_for<T>(what: &str, mut found: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        if let Some(value) = found() {
+            return value;
+        }
+        assert!(Instant::now() < deadline, "{what} did not happen");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+impl Fixture {
+    fn check_runs(&self, sha: &str) -> Vec<CheckRun> {
+        let all = fake_github(&self.dir.path().join("store")).check_runs().unwrap();
+        all.into_iter().filter(|run| run.head_sha == sha).collect()
+    }
+
+    fn state(&self) -> std::path::PathBuf {
+        azad::orchestrator::state_dir(&self.dir.path().join("store"))
+    }
+
+    /// Waits until `count` runs were accepted and all of them are done.
+    fn all_done(&self, count: usize) {
+        wait_for(&format!("{count} runs that are done"), || {
+            let runs = azad::orchestrator::record::run_dirs(&self.state()).unwrap();
+            let done = runs.len() == count && runs.iter().all(|(_, dir)| azad::orchestrator::record::is_done(dir));
+            done.then_some(())
+        });
+    }
+
+    fn record(&self, id: u64) -> azad::orchestrator::record::Run {
+        let runs = azad::orchestrator::record::run_dirs(&self.state()).unwrap();
+        let (_, dir) = runs.into_iter().find(|(run, _)| *run == id).unwrap();
+        azad::orchestrator::record::Run::read(&dir).unwrap()
+    }
+}
+
+const SLOW_STEP: &str = "slow = task(name = \"slow\", cmd = \"sleep 3; cat src/a.txt\", sources = [\"src/**\"], image = IMAGE)\n\
+                         goal(\"check\", require = [lint, slow]";
+
+/// A newer commit of a branch cancels the run of its older commit: the older check run completes as cancelled while its
+/// step still runs, and the run starts no more steps (decision 0035). Each commit of the default branch runs.
+#[test]
+fn a_newer_commit_of_a_branch_cancels_the_older_run_but_each_commit_of_main_runs() {
+    let mut f = fixture();
+    let tasks = TASKS.replace("goal(\"check\", require = [lint, build]", SLOW_STEP);
+    commit(&f.repo, &[("tasks.star", &tasks)], "a slow step");
+    f.serve();
+    git(&f.repo, &["checkout", "-q", "-b", "feature"]);
+    let older = commit(&f.repo, &[("src/a.txt", "older\n")], "older");
+    f.simulator(SECRET).push("feature").unwrap();
+    wait_for("the older check run in progress", || {
+        f.check_runs(&older).first().filter(|run| run.status == CheckStatus::InProgress).cloned()
+    });
+    let newer = commit(&f.repo, &[("src/a.txt", "newer\n")], "newer");
+    f.simulator(SECRET).push("feature").unwrap();
+    let cancelled = f.completed(&older).remove(0);
+    assert_eq!(cancelled.conclusion, Some(Conclusion::Cancelled), "{cancelled:?}");
+    assert!(cancelled.summary.contains("A newer commit of refs/heads/feature"), "{}", cancelled.summary);
+    let current = f.completed(&newer).remove(0);
+    assert_eq!(current.conclusion, Some(Conclusion::Success), "{}", current.summary);
+    f.all_done(2);
+    let record = f.record(1);
+    assert!(record.cancelled.is_some(), "the record says that the run was cancelled");
+    assert_eq!(record.goals[0].conclusion, Some(Conclusion::Cancelled));
+
+    git(&f.repo, &["checkout", "-q", "main"]);
+    let first = commit(&f.repo, &[("src/a.txt", "main one\n")], "main one");
+    f.simulator(SECRET).push("main").unwrap();
+    let second = commit(&f.repo, &[("src/a.txt", "main two\n")], "main two");
+    f.simulator(SECRET).push("main").unwrap();
+    for sha in [first, second] {
+        assert_eq!(f.completed(&sha)[0].conclusion, Some(Conclusion::Success), "each commit of main runs");
+    }
+}
+
+/// A push of a branch and a pull request from it name the same commit at the same trust level: the commit gets one
+/// check run for the goal.
+#[test]
+fn a_push_and_a_pull_request_of_one_commit_give_one_check_run() {
+    let mut f = fixture();
+    f.serve();
+    git(&f.repo, &["checkout", "-q", "-b", "feature"]);
+    let sha = commit(&f.repo, &[("src/a.txt", "changed\n")], "change");
+    f.simulator(SECRET).push("feature").unwrap();
+    f.simulator(SECRET).pull_request(1, "feature").unwrap();
+    f.all_done(2);
+    let checks = f.check_runs(&sha);
+    assert_eq!(checks.len(), 1, "{checks:#?}");
+    assert_eq!(checks[0].conclusion, Some(Conclusion::Success));
+}
+
+/// "Re-run" on a check run makes a new check run of its goal on the same commit, and "Re-run all checks" does that for
+/// each goal of the commit; the results that the cache holds stay hits.
+#[test]
+fn a_rerun_makes_a_new_check_run_of_the_goal() {
+    let mut f = fixture();
+    f.serve();
+    let main = git(&f.repo, &["rev-parse", "HEAD"]);
+    f.simulator(SECRET).push("main").unwrap();
+    let first = f.completed(&main).remove(0);
+    f.simulator(SECRET).rerun(first.id).unwrap();
+    f.all_done(2);
+    let checks = f.completed(&main);
+    assert_eq!(checks.len(), 2, "{checks:#?}");
+    assert_eq!(checks[1].name, first.name);
+    assert_eq!(checks[1].conclusion, Some(Conclusion::Success));
+    assert_eq!(checks[1].title, "0 ran, 2 cached, 0 failed");
+
+    f.simulator(SECRET).rerun_all("main").unwrap();
+    f.all_done(3);
+    let names: Vec<String> = f.completed(&main).into_iter().map(|run| run.name).collect();
+    assert_eq!(names, [first.name.as_str(); 3]);
+}
+
+/// The goals of a run run at the same time, and an action that two of them need runs once: the second goal waits for
+/// its result (decision 0035).
+#[test]
+fn goals_run_at_the_same_time_and_share_an_action_that_both_need() {
+    let mut f = fixture();
+    let tasks = r#"
+IMAGE = image("tools@sha256:00000000000000000000000000000000000000000000000000000000000000cc")
+shared = task(name = "shared", cmd = "sleep 2; echo shared output", image = IMAGE)
+one = task(name = "one", cmd = "sleep 1", image = IMAGE)
+two = task(name = "two", cmd = "sleep 1; echo two", image = IMAGE)
+goal("first", require = [shared, one], on = ["push"])
+goal("second", require = [shared, two], on = ["push"])
+"#;
+    let sha = commit(&f.repo, &[("tasks.star", tasks)], "two goals");
+    f.serve();
+    f.simulator(SECRET).push("main").unwrap();
+    let checks = f.completed(&sha);
+    assert!(checks.iter().all(|run| run.conclusion == Some(Conclusion::Success)), "{checks:#?}");
+    let record = f.record(1);
+    let [first, second] = &record.goals[..] else { panic!("two goals: {record:?}") };
+    assert!(
+        first.started < second.ended.unwrap() && second.started < first.ended.unwrap(),
+        "the goals overlap: {record:?}"
+    );
+    let shared: Vec<Vec<String>> = record
+        .goals
+        .iter()
+        .map(|goal| goal.steps.iter().find(|step| step.name == "//:shared").unwrap().tail.iter().cloned().collect())
+        .collect();
+    let ran = shared.iter().filter(|tail| tail.iter().any(|line| line == "shared output")).count();
+    let waited = shared.iter().filter(|tail| tail.iter().any(|line| line.contains("waits for its result"))).count();
+    assert_eq!((ran, waited), (1, 1), "the shared step runs once: {shared:?}");
+}

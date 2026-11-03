@@ -57,3 +57,8 @@ Decision 0029 makes the orchestrator its own binary: `azad serve`, `azad simulat
 ## Amendment, 2026-11-03: GitHub
 
 Decision 0032 adds the client of GitHub's API, as a GitHub App, and gives a tag the trust level `main` when the default branch holds its commit.
+
+## Amendment, 2026-11-03: runs at the same time
+
+Decision 0035 replaces "oldest first, one at a time": runs, and the goals of a run, run at the same time, and they share one pool of actions.
+A newer commit of a branch or a pull request cancels the runs of its older commits, a goal gets one check run for each commit and trust level, and GitHub's "Re-run" buttons work.

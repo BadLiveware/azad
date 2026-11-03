@@ -81,6 +81,7 @@ pub fn run(id: u64) -> Result<RunView, String> {
         started: run.started.map(time),
         took: run.started.map(|started| duration(run_end(&run, done, now).saturating_sub(started))),
         failure: run.failure.clone(),
+        cancelled: run.cancelled.clone(),
         goals: run.goals.iter().map(|goal| goal_view(goal, now)).collect(),
         done,
     })
@@ -108,15 +109,17 @@ pub fn step(id: u64, goal_index: usize, step_index: usize) -> Result<StepPage, S
 }
 
 /// The output of a step of the goal that is the `goal_index`th to start in its run: a run that started again after a
-/// stop has a goal more than once.
+/// stop has a goal more than once, and the goals of a run run at the same time, so their lines interleave.
 fn step_lines(entries: &[record::Entry], goal_index: usize, goal: &str, step: &str) -> Vec<Line> {
     let mut started = 0;
     let mut current = false;
     let mut lines = Vec::new();
     for entry in entries {
         match &entry.event {
-            RecordEvent::GoalStarted { .. } => {
-                current = started == goal_index;
+            RecordEvent::GoalStarted { goal: name, .. } => {
+                if name == goal {
+                    current = started == goal_index;
+                }
                 started += 1;
             }
             RecordEvent::Line { goal: name, step: line_step, text } if current && name == goal && line_step == step => {
@@ -130,6 +133,9 @@ fn step_lines(entries: &[record::Entry], goal_index: usize, goal: &str, step: &s
 
 fn run_standing(run: &Run, done: bool) -> Standing {
     let failed = run.failure.is_some() || run.goals.iter().any(|goal| goal_standing(goal) == Standing::Failed);
+    if run.cancelled.is_some() {
+        return Standing::Cancelled;
+    }
     match (failed, done, run.started.is_some()) {
         (true, _, _) => Standing::Failed,
         (false, true, _) => Standing::Passed,
@@ -142,6 +148,7 @@ fn goal_standing(goal: &Goal) -> Standing {
     match goal.conclusion {
         Some(Conclusion::Success) => Standing::Passed,
         Some(Conclusion::Failure) => Standing::Failed,
+        Some(Conclusion::Cancelled) => Standing::Cancelled,
         None if goal.count(StepState::Failed) > 0 => Standing::Failed,
         None => Standing::Running,
     }

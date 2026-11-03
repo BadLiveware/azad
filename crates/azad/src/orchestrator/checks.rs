@@ -24,6 +24,8 @@ pub enum CheckStatus {
 pub enum Conclusion {
     Success,
     Failure,
+    /// A newer commit of the same branch or pull request came, so the result no longer matters.
+    Cancelled,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,11 +69,12 @@ impl fmt::Display for CheckRun {
         let state = match (self.status, self.conclusion) {
             (_, Some(Conclusion::Success)) => "success",
             (_, Some(Conclusion::Failure)) => "failure",
+            (_, Some(Conclusion::Cancelled)) => "cancelled",
             (CheckStatus::Queued, None) => "queued",
             (CheckStatus::InProgress, None) | (CheckStatus::Completed, None) => "running",
         };
         let short_sha = self.head_sha.get(..12).unwrap_or(&self.head_sha);
-        write!(f, "{state:<8} {} {short_sha} {}", self.repository, self.name)?;
+        write!(f, "{state:<9} {} {short_sha} {}", self.repository, self.name)?;
         if !self.title.is_empty() {
             write!(f, ": {}", self.title)?;
         }

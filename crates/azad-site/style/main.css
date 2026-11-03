@@ -9,6 +9,7 @@
   --failed: #c9302c;
   --running: #b7791f;
   --queued: #8a8f96;
+  --cancelled: #5f646b;
   --cached: #5b6bbf;
   --log-bg: #16181b;
   --log-fg: #e4e4e2;
@@ -59,6 +60,7 @@ td.time { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .badge.failed { background: var(--failed); }
 .badge.running { background: var(--running); }
 .badge.queued { background: var(--queued); }
+.badge.cancelled { background: var(--cancelled); }
 
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0 0 24px; }
 .facts dt { color: var(--quiet); }

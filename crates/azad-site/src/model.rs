@@ -10,6 +10,7 @@ pub enum Standing {
     Running,
     Passed,
     Failed,
+    Cancelled,
 }
 
 impl Standing {
@@ -19,6 +20,7 @@ impl Standing {
             Standing::Running => "running",
             Standing::Passed => "passed",
             Standing::Failed => "failed",
+            Standing::Cancelled => "cancelled",
         }
     }
 }
@@ -53,6 +55,8 @@ pub struct RunView {
     pub started: Option<String>,
     pub took: Option<String>,
     pub failure: Option<String>,
+    /// Why the run was cancelled.
+    pub cancelled: Option<String>,
     pub goals: Vec<GoalView>,
     /// Whether the run is done, so that its page stops looking for news.
     pub done: bool,

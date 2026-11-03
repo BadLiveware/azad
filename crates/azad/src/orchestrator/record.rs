@@ -15,6 +15,7 @@ use crate::scheduler::Status;
 use crate::trust::Trust;
 
 pub const RECORD_FILE: &str = "record.jsonl";
+const CANCELLED_REASON: &str = "the run was cancelled";
 /// How many lines of output a step keeps in a summary of a record; the whole output stays in the record.
 pub const TAIL_LINES: usize = 100;
 
@@ -92,6 +93,10 @@ pub enum RecordEvent {
     },
     /// The run could not go on, such as when its commit cannot be fetched.
     RunFailed {
+        reason: String,
+    },
+    /// The run starts no more steps, because a newer commit of its branch or pull request came.
+    RunCancelled {
         reason: String,
     },
 }
@@ -209,8 +214,14 @@ impl Goal {
                 self.ended = Some(at);
                 self.conclusion = Some(*conclusion);
                 self.title = Some(title.clone());
+                if *conclusion == Conclusion::Cancelled {
+                    self.skip_waiting_steps(CANCELLED_REASON);
+                }
             }
-            RecordEvent::RunStarted { .. } | RecordEvent::GoalStarted { .. } | RecordEvent::RunFailed { .. } => {}
+            RecordEvent::RunStarted { .. }
+            | RecordEvent::GoalStarted { .. }
+            | RecordEvent::RunFailed { .. }
+            | RecordEvent::RunCancelled { .. } => {}
         }
     }
 
@@ -221,6 +232,14 @@ impl Goal {
                 self.steps.push(Step::new(name));
                 self.steps.last_mut().expect("a step was pushed")
             }
+        }
+    }
+
+    /// The steps that did not start will not start.
+    fn skip_waiting_steps(&mut self, reason: &str) {
+        for step in self.steps.iter_mut().filter(|step| step.state == StepState::Queued) {
+            step.state = StepState::Skipped;
+            step.reason = Some(reason.to_owned());
         }
     }
 
@@ -236,6 +255,8 @@ pub struct Run {
     pub trust: Option<Trust>,
     pub goals: Vec<Goal>,
     pub failure: Option<String>,
+    /// Why the run was cancelled.
+    pub cancelled: Option<String>,
     pub last: Option<u64>,
 }
 
@@ -256,6 +277,7 @@ impl Run {
         match &entry.event {
             RecordEvent::RunStarted { trust } => self.trust = Some(*trust),
             RecordEvent::RunFailed { reason } => self.failure = Some(reason.clone()),
+            RecordEvent::RunCancelled { reason } => self.cancelled = Some(reason.clone()),
             RecordEvent::GoalStarted { goal, steps } => self.goals.push(Goal::new(goal, steps, entry.at)),
             RecordEvent::StepStarted { goal, .. }
             | RecordEvent::Line { goal, .. }

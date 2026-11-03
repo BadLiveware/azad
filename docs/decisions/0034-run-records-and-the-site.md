@@ -41,3 +41,8 @@ Azad's hosts are VMs on a developer's machine (`docs/plan.md`), so the site runs
 
 GitHub's page of a check run does not use a `details_url` of plain HTTP on a loopback address, such as the development host's site: its link goes back to the check run.
 So the summary of each check run also starts with a link to its run's page, which GitHub shows; the `details_url` stays, for a site with an HTTPS address.
+
+## Amendment, 2026-11-03: cancels
+
+Decision 0035 adds the event `run_cancelled`, with why, and the conclusion `cancelled`.
+The goals of a run run at the same time, so the lines of their steps interleave in the record; each line names its goal and its step.

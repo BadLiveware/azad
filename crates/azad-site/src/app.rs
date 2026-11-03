@@ -183,6 +183,7 @@ fn RunDetails(run: RunView) -> impl IntoView {
             <dt>"Time"</dt><dd>{run.took.unwrap_or_default()}</dd>
         </dl>
         {run.failure.map(|failure| view! { <p class="failure">"The run could not go on: "{failure}</p> })}
+        {run.cancelled.map(|reason| view! { <p class="quiet">"Cancelled: "{reason}</p> })}
         {run.goals.into_iter().enumerate().map(|(index, goal)| view! { <Goal id index goal/> }).collect_view()}
     }
 }

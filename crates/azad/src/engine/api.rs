@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use crate::frontend::starlark::{Context, expand_calls};
 use crate::remote::{RemoteBackend, RemoteCache, RemoteConfig, RemoteSummary};
@@ -29,6 +30,7 @@ const TOOLS_LOCATION: &str = "tools";
 const ISOLATED_HISTORY: &str = "isolated";
 use crate::engine::config::vm_config;
 use crate::engine::missing::{Mentions, Workspace};
+use crate::engine::pool::{Pool, Pooled};
 use crate::engine::tasks::DependencySources;
 use crate::engine::{EngineConfig, EngineError, Mode, SandboxKind, TextFrontend};
 
@@ -187,6 +189,12 @@ impl Engine {
         };
         let backend = Box::new(KeepActions { inner: backend, store: store.clone() });
         Ok(Engine { config, store, puller, backend, remote: None, frontends, timings: Timings::default() })
+    }
+
+    /// Runs the engine's actions through `pool`, which other engines of the process share.
+    pub fn with_pool(self, pool: Pool) -> Self {
+        let trust = self.config.trust;
+        Engine { backend: Box::new(Pooled { inner: self.backend, pool, trust }), ..self }
     }
 
     /// Adds a frontend; frontends added later are asked first.
@@ -753,7 +761,18 @@ impl Engine {
         parallelism: usize,
         observe: &mut dyn FnMut(Event),
     ) -> Result<RunReport, EngineError> {
-        let runner = Runner::new(&goal.graph, self.backend.as_ref(), parallelism);
+        self.run_until_stopped(goal, parallelism, &AtomicBool::new(false), observe)
+    }
+
+    /// As `run`, but once `stop` is set, no more actions start, and the run ends when the running actions end.
+    pub fn run_until_stopped(
+        &self,
+        goal: &Goal,
+        parallelism: usize,
+        stop: &AtomicBool,
+        observe: &mut dyn FnMut(Event),
+    ) -> Result<RunReport, EngineError> {
+        let runner = Runner::new(&goal.graph, self.backend.as_ref(), parallelism).with_stop(stop);
         let mut mentions = Mentions::default();
         let workspace = || {
             Ok(Workspace {

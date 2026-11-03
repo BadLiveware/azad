@@ -15,6 +15,7 @@ const DEFAULT_LISTEN: &str = "127.0.0.1:8484";
 const DEFAULT_WEBHOOK_URL: &str = "http://127.0.0.1:8484/webhook";
 const DEFAULT_BRANCH: &str = "main";
 const WEBHOOK_SECRET_ENV: &str = "AZAD_WEBHOOK_SECRET";
+const CHECKED_OUT: &str = "HEAD";
 
 #[derive(Debug, Parser)]
 #[command(name = "azad-orchestrator", version = azad::VERSION, about = "Azad's orchestrator: runs goals for GitHub's events")]
@@ -56,6 +57,9 @@ enum OrchestratorCommand {
         /// page (decision 0034).
         #[arg(long)]
         site_url: Option<String>,
+        /// How many actions run at the same time, for all runs together.
+        #[arg(long, default_value_t = orchestrator::DEFAULT_PARALLELISM)]
+        parallelism: usize,
     },
     /// Send an event from the workspace's git repository to `serve`, as GitHub would, signed with the secret in
     /// $AZAD_WEBHOOK_SECRET.
@@ -82,6 +86,11 @@ enum SimulatedEvent {
     /// A pull request from a branch, when it is opened or gets a new commit. The default is the branch that is checked
     /// out.
     PullRequest { number: u64, branch: Option<String> },
+    /// A request to run a check run again, by its ID, as `checks` shows it: "Re-run" on GitHub.
+    Rerun { check: u64 },
+    /// A request to run the check runs of a commit again: "Re-run all checks" on GitHub. The default is the commit
+    /// that is checked out.
+    RerunAll { commit: Option<String> },
 }
 
 fn main() -> ExitCode {
@@ -98,12 +107,23 @@ fn run(cli: Cli) -> Result<()> {
     let mut config = EngineConfig::from_environment(cli.store, cli.root)?;
     config.executor = cli.executor;
     match cli.command {
-        OrchestratorCommand::Serve { listen, github_app_id, github_app_key, github_api, site_url } => {
+        OrchestratorCommand::Serve { listen, github_app_id, github_app_key, github_api, site_url, parallelism } => {
             let app = match (github_app_id, github_app_key) {
                 (Some(id), Some(key)) => Some(github_app(&id, &key, &github_api)?),
                 _ => None,
             };
-            serve(config, &listen, app, site_url.as_deref())
+            serve(config, &listen, app, site_url.as_deref(), parallelism)
+        }
+        OrchestratorCommand::Simulate { event: SimulatedEvent::Rerun { check }, server, default_branch } => {
+            let answer = simulator(&config, &server, &default_branch)?.rerun(check)?;
+            eprintln!("azad-orchestrator: asked to run check run {check} again: {answer}");
+            Ok(())
+        }
+        OrchestratorCommand::Simulate { event: SimulatedEvent::RerunAll { commit }, server, default_branch } => {
+            let commit = commit.unwrap_or_else(|| CHECKED_OUT.to_owned());
+            let answer = simulator(&config, &server, &default_branch)?.rerun_all(&commit)?;
+            eprintln!("azad-orchestrator: asked to run the check runs of {commit} again: {answer}");
+            Ok(())
         }
         OrchestratorCommand::Simulate { event: SimulatedEvent::Push { branch }, server, default_branch } => {
             let branch = branch_or_current(&config, branch)?;
@@ -142,7 +162,13 @@ fn github_app(id: &str, key: &Path, api: &str) -> Result<GitHubApp> {
     Ok(GitHubApp::new(id, &pem, api)?)
 }
 
-fn serve(config: EngineConfig, listen: &str, app: Option<GitHubApp>, site_url: Option<&str>) -> Result<()> {
+fn serve(
+    config: EngineConfig,
+    listen: &str,
+    app: Option<GitHubApp>,
+    site_url: Option<&str>,
+    parallelism: usize,
+) -> Result<()> {
     let secret = webhook_secret()?;
     let listener = TcpListener::bind(listen).with_context(|| format!("listening on {listen}"))?;
     eprintln!("azad-orchestrator: webhooks to http://{}{}", listener.local_addr()?, orchestrator::WEBHOOK_PATH);
@@ -152,7 +178,8 @@ fn serve(config: EngineConfig, listen: &str, app: Option<GitHubApp>, site_url: O
             Orchestrator::with_github(config, &secret, app)
         }
         None => Orchestrator::new(config, &secret),
-    };
+    }
+    .with_parallelism(parallelism);
     let orchestrator = match site_url {
         Some(url) => orchestrator.with_site(url),
         None => orchestrator,
@@ -170,7 +197,8 @@ fn branch_or_current(config: &EngineConfig, branch: Option<String>) -> Result<St
     if let Some(branch) = branch {
         return Ok(branch);
     }
-    let output = Command::new("git").arg("-C").arg(&config.root).args(["symbolic-ref", "--short", "HEAD"]).output()?;
+    let output =
+        Command::new("git").arg("-C").arg(&config.root).args(["symbolic-ref", "--short", CHECKED_OUT]).output()?;
     if !output.status.success() {
         bail!("no branch is checked out in {}; name one", config.root.display());
     }

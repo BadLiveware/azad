@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::orchestrator::event::{Event, EventKind, Repository, pull_request_ref};
+use crate::orchestrator::event::{Event, EventKind, Repository, Rerun, pull_request_ref};
 use crate::orchestrator::signature::{SIGNATURE_HEADER, sign};
 
 const GIT: &str = "git";
@@ -56,6 +56,7 @@ impl Simulator {
             git_ref,
             head_sha,
             pull_request: None,
+            rerun: None,
         })
     }
 
@@ -69,6 +70,7 @@ impl Simulator {
             git_ref,
             head_sha,
             pull_request: None,
+            rerun: None,
         })
     }
 
@@ -84,7 +86,21 @@ impl Simulator {
             git_ref,
             head_sha,
             pull_request: Some(number),
+            rerun: None,
         })
+    }
+
+    /// A request to run check run `id` again, as GitHub sends it when someone presses "Re-run".
+    pub fn rerun(&self, id: u64) -> Result<String, SimulateError> {
+        let (name, payload) = Rerun::Check { repository: self.repository().full_name, id }.to_webhook();
+        self.deliver(name, &payload)
+    }
+
+    /// A request to run the check runs of `commit` again, as GitHub sends it for "Re-run all checks".
+    pub fn rerun_all(&self, commit: &str) -> Result<String, SimulateError> {
+        let head_sha = self.git(&["rev-parse", "--verify", &format!("{commit}^{{commit}}")])?;
+        let (name, payload) = Rerun::Suite { repository: self.repository().full_name, head_sha }.to_webhook();
+        self.deliver(name, &payload)
     }
 
     fn repository(&self) -> Repository {
@@ -97,12 +113,16 @@ impl Simulator {
     }
 
     fn send(&self, event: &Event) -> Result<String, SimulateError> {
-        let payload = serde_json::to_vec(&event.to_webhook()).expect("a JSON value serializes");
+        self.deliver(event.kind.name(), &event.to_webhook())
+    }
+
+    fn deliver(&self, name: &str, payload: &serde_json::Value) -> Result<String, SimulateError> {
+        let payload = serde_json::to_vec(payload).expect("a JSON value serializes");
         let agent: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
         let send_error = |reason: String| SimulateError::Send { url: self.url.clone(), reason };
         let mut response = agent
             .post(&self.url)
-            .header(EVENT_HEADER, event.kind.name())
+            .header(EVENT_HEADER, name)
             .header(DELIVERY_HEADER, delivery_id().map_err(send_error)?)
             .header(SIGNATURE_HEADER, sign(&self.secret, &payload))
             .content_type("application/json")

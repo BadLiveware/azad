@@ -6,6 +6,10 @@ use crate::frontend::{PULL_REQUEST_EVENT, PUSH_EVENT};
 use crate::trust::Trust;
 
 const BRANCH_PREFIX: &str = "refs/heads/";
+const CHECK_RUN_EVENT: &str = "check_run";
+const CHECK_SUITE_EVENT: &str = "check_suite";
+/// The action of a check run or a check suite when someone asks to run it again.
+const RERUN_ACTION: &str = "rerequested";
 /// The pull request actions that give it a commit to check.
 const CHECKED_PULL_REQUEST_ACTIONS: [&str; 3] = ["opened", "synchronize", "reopened"];
 
@@ -45,9 +49,22 @@ pub struct Event {
     pub git_ref: String,
     pub head_sha: String,
     pub pull_request: Option<u64>,
+    /// The goals that someone asked to run again, from their check runs; none runs every goal that names the event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerun: Option<Vec<String>>,
 }
 
 impl Event {
+    /// Whether a newer commit of the event's ref makes the event's run outdated: on a branch other than the default
+    /// branch, and on a pull request. Each commit of the default branch runs, and so does each tag.
+    pub fn is_outdated_by_newer_commits(&self) -> bool {
+        match (self.kind, self.git_ref.strip_prefix(BRANCH_PREFIX)) {
+            (EventKind::PullRequest, _) => true,
+            (EventKind::Push, Some(branch)) => branch != self.repository.default_branch,
+            (EventKind::Push, None) => false,
+        }
+    }
+
     /// The trust level of the event's runs, which comes from the event, never from the code that runs: a push to the
     /// default branch is `main`; a pull request, and a push to another branch, is `pull-request`; anything else, such
     /// as a tag that may not be on the default branch, is `none`.
@@ -131,6 +148,7 @@ fn push(payload: PushPayload) -> Option<Event> {
         git_ref: payload.git_ref,
         head_sha: payload.after,
         pull_request: None,
+        rerun: None,
     })
 }
 
@@ -144,7 +162,93 @@ fn pull_request(payload: PullRequestPayload) -> Option<Event> {
         git_ref: pull_request_ref(payload.number),
         head_sha: payload.pull_request.head.sha,
         pull_request: Some(payload.number),
+        rerun: None,
     })
+}
+
+/// A request to run check runs again, as GitHub sends it when someone presses "Re-run" on a check run, or "Re-run all
+/// checks" on a commit's checks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Rerun {
+    Check { repository: String, id: u64 },
+    Suite { repository: String, head_sha: String },
+}
+
+impl Rerun {
+    /// The request of a webhook delivery; none for another event, or another action, such as a check run that was
+    /// created or completed.
+    pub fn from_webhook(name: &str, payload: &[u8]) -> Result<Option<Rerun>, serde_json::Error> {
+        match name {
+            CHECK_RUN_EVENT => {
+                let payload: CheckRunPayload = serde_json::from_slice(payload)?;
+                let rerun = Rerun::Check { repository: payload.repository.full_name, id: payload.check_run.id };
+                Ok((payload.action == RERUN_ACTION).then_some(rerun))
+            }
+            CHECK_SUITE_EVENT => {
+                let payload: CheckSuitePayload = serde_json::from_slice(payload)?;
+                let rerun =
+                    Rerun::Suite { repository: payload.repository.full_name, head_sha: payload.check_suite.head_sha };
+                Ok((payload.action == RERUN_ACTION).then_some(rerun))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// The event name and the webhook payload of the request, in GitHub's format, with the fields that the
+    /// orchestrator reads.
+    pub fn to_webhook(&self) -> (&'static str, serde_json::Value) {
+        match self {
+            Rerun::Check { repository, id } => (
+                CHECK_RUN_EVENT,
+                serde_json::json!({
+                    "action": RERUN_ACTION, "check_run": { "id": id }, "repository": { "full_name": repository },
+                }),
+            ),
+            Rerun::Suite { repository, head_sha } => (
+                CHECK_SUITE_EVENT,
+                serde_json::json!({
+                    "action": RERUN_ACTION,
+                    "check_suite": { "head_sha": head_sha },
+                    "repository": { "full_name": repository },
+                }),
+            ),
+        }
+    }
+
+    pub fn repository(&self) -> &str {
+        match self {
+            Rerun::Check { repository, .. } | Rerun::Suite { repository, .. } => repository,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct NamedRepository {
+    full_name: String,
+}
+
+#[derive(Deserialize)]
+struct CheckRunPayload {
+    action: String,
+    check_run: CheckRunFields,
+    repository: NamedRepository,
+}
+
+#[derive(Deserialize)]
+struct CheckRunFields {
+    id: u64,
+}
+
+#[derive(Deserialize)]
+struct CheckSuitePayload {
+    action: String,
+    check_suite: CheckSuiteFields,
+    repository: NamedRepository,
+}
+
+#[derive(Deserialize)]
+struct CheckSuiteFields {
+    head_sha: String,
 }
 
 /// Where GitHub keeps the head of a pull request.
@@ -163,7 +267,7 @@ mod tests {
             default_branch: "main".to_owned(),
         };
         let pull_request = (kind == EventKind::PullRequest).then_some(7);
-        Event { kind, repository, git_ref: git_ref.to_owned(), head_sha: "abc".to_owned(), pull_request }
+        Event { kind, repository, git_ref: git_ref.to_owned(), head_sha: "abc".to_owned(), pull_request, rerun: None }
     }
 
     #[test]
@@ -181,6 +285,27 @@ mod tests {
             let payload = serde_json::to_vec(&original.to_webhook()).unwrap();
             assert_eq!(Event::from_webhook(original.kind.name(), &payload).unwrap(), Some(original));
         }
+    }
+
+    #[test]
+    fn newer_commits_outdate_a_pull_request_and_a_branch_but_not_the_default_branch_or_a_tag() {
+        assert!(event(EventKind::PullRequest, "refs/pull/7/head").is_outdated_by_newer_commits());
+        assert!(event(EventKind::Push, "refs/heads/feature").is_outdated_by_newer_commits());
+        assert!(!event(EventKind::Push, "refs/heads/main").is_outdated_by_newer_commits());
+        assert!(!event(EventKind::Push, "refs/tags/v1").is_outdated_by_newer_commits());
+    }
+
+    #[test]
+    fn a_rerun_reads_back_from_its_webhook_payload_and_other_check_actions_are_ignored() {
+        let check = Rerun::Check { repository: "o/n".to_owned(), id: 42 };
+        let suite = Rerun::Suite { repository: "o/n".to_owned(), head_sha: "abc".to_owned() };
+        for original in [check, suite] {
+            let (name, payload) = original.to_webhook();
+            let payload = serde_json::to_vec(&payload).unwrap();
+            assert_eq!(Rerun::from_webhook(name, &payload).unwrap(), Some(original));
+        }
+        let completed = br#"{"action": "completed", "check_run": {"id": 42}, "repository": {"full_name": "o/n"}}"#;
+        assert_eq!(Rerun::from_webhook(CHECK_RUN_EVENT, completed).unwrap(), None);
     }
 
     #[test]

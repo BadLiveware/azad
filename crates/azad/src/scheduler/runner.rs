@@ -4,6 +4,7 @@
 use crate::log::{LogSink, Stream};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
@@ -198,6 +199,7 @@ pub struct Runner<'a> {
     graph: &'a Graph,
     backend: &'a dyn Backend,
     parallelism: usize,
+    stop: Option<&'a AtomicBool>,
 }
 
 impl fmt::Debug for Runner<'_> {
@@ -331,7 +333,17 @@ impl<'a> Run<'a> {
 
 impl<'a> Runner<'a> {
     pub fn new(graph: &'a Graph, backend: &'a dyn Backend, parallelism: usize) -> Self {
-        Runner { graph, backend, parallelism: parallelism.max(1) }
+        Runner { graph, backend, parallelism: parallelism.max(1), stop: None }
+    }
+
+    /// Once `stop` is set, the run starts no more actions: the actions that run already end, and the run ends after
+    /// them, with the actions that did not start waiting.
+    pub fn with_stop(self, stop: &'a AtomicBool) -> Self {
+        Runner { stop: Some(stop), ..self }
+    }
+
+    fn stopped(&self) -> bool {
+        self.stop.is_some_and(|stop| stop.load(Ordering::Relaxed))
     }
 
     /// Runs what the goal needs, and reports progress to `observe`.
@@ -341,7 +353,10 @@ impl<'a> Runner<'a> {
             let (sender, receiver) = mpsc::channel::<Message>();
             let mut running = 0usize;
             loop {
-                let ready = rules::derive(&run.facts).must_run;
+                let ready = match self.stopped() {
+                    true => BTreeSet::new(),
+                    false => rules::derive(&run.facts).must_run,
+                };
                 let mut dispatched = false;
                 for id in ready {
                     if running >= self.parallelism {
