@@ -17,6 +17,7 @@ pub use compare::{ChangedPath, PathChange};
 pub use directory_state::DirectoryState;
 pub use error::StoreError;
 pub use ingest::Selection;
+pub use materialize::SharedTree;
 pub use scratch::ScratchDir;
 pub use state::{ActionCache, State};
 

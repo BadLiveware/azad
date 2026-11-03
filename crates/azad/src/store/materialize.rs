@@ -16,14 +16,27 @@ const WRITABLE_EXECUTABLE_MODE: u32 = 0o755;
 /// The lock file of a shared tree, next to its directory.
 const LOCK_EXTENSION: &str = ".lock";
 
+/// The shared directory of a tree, and whether this call made it; a call that found it, or waited while another call
+/// made it, did not.
+#[derive(Debug)]
+pub struct SharedTree {
+    pub path: PathBuf,
+    pub made: bool,
+}
+
 impl Store {
+    /// Returns a directory with the content of a tree, as `share` does.
+    pub fn materialize(&self, tree: &Digest) -> Result<PathBuf, StoreError> {
+        self.share(tree).map(|shared| shared.path)
+    }
+
     /// Returns a directory with the content of a tree. The directory is made once per tree and shared; callers must
     /// not change it, and a sandbox mounts it read-only. One run makes it while the others that need it wait, so actions
     /// that start at the same time with a new image do not each copy the image.
-    pub fn materialize(&self, tree: &Digest) -> Result<PathBuf, StoreError> {
+    pub fn share(&self, tree: &Digest) -> Result<SharedTree, StoreError> {
         let target = self.root.join(TREES_DIR).join(tree.function().name()).join(tree.hex());
         if target.is_dir() {
-            return Ok(target);
+            return Ok(SharedTree { path: target, made: false });
         }
         let parent = target.parent().expect("a tree path has a parent");
         fs::create_dir_all(parent).map_err(|e| StoreError::io(parent, e))?;
@@ -42,17 +55,17 @@ impl Store {
         made
     }
 
-    fn make_shared_tree(&self, tree: &Digest, target: PathBuf) -> Result<PathBuf, StoreError> {
+    fn make_shared_tree(&self, tree: &Digest, target: PathBuf) -> Result<SharedTree, StoreError> {
         if target.is_dir() {
-            return Ok(target);
+            return Ok(SharedTree { path: target, made: false });
         }
         let tmp_root = self.tmp_dir();
         let staging = TempDir::new_in(&tmp_root).map_err(|e| StoreError::io(&tmp_root, e))?;
         let built = staging.path().join("tree");
         self.write_tree(tree, &built, Placement::LinkWhenShared)?;
         match fs::rename(&built, &target) {
-            Ok(()) => Ok(target),
-            Err(_) if target.is_dir() => Ok(target),
+            Ok(()) => Ok(SharedTree { path: target, made: true }),
+            Err(_) if target.is_dir() => Ok(SharedTree { path: target, made: false }),
             Err(e) => Err(StoreError::io(&target, e)),
         }
     }

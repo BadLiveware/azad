@@ -101,6 +101,27 @@ fn materialize_gives_back_the_same_tree() {
     assert_eq!(fs::metadata(copy.join("bin/tool")).unwrap().permissions().mode() & 0o777, 0o555);
 }
 
+/// Calls that need a tree at the same time share one directory, and only one of them makes it, so only that one has
+/// the time of the copy to report.
+#[test]
+fn one_of_the_calls_that_share_a_tree_at_the_same_time_makes_it() {
+    const CALLS: usize = 8;
+    let (dir, store) = store();
+    let root = dir.path().join("src");
+    for n in 0..100 {
+        write(&root, &format!("files/{n}.txt"), n.to_string().as_bytes(), false);
+    }
+    let tree = store.ingest(&root, &Selection::All).unwrap();
+
+    let shared: Vec<_> = std::thread::scope(|scope| {
+        let calls: Vec<_> = (0..CALLS).map(|_| scope.spawn(|| store.share(&tree).unwrap())).collect();
+        calls.into_iter().map(|call| call.join().unwrap()).collect()
+    });
+    assert_eq!(shared.iter().filter(|one| one.made).count(), 1, "{shared:?}");
+    assert!(shared.iter().all(|one| one.path == shared[0].path), "{shared:?}");
+    assert!(!store.share(&tree).unwrap().made, "a tree that is there is not made again");
+}
+
 #[test]
 fn globs_select_files_and_drop_empty_directories() {
     let (dir, store) = store();

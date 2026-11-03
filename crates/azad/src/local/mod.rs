@@ -220,8 +220,11 @@ impl LocalBackend {
         fs::create_dir_all(&dir).map_err(|source| ExecError::Io { path: dir, error: source })?;
         let placed = relative_paths(&work)?;
         let timer = self.timings.start(format!("place the files of the root, {}", tree_name(&action.root)));
-        let root = self.store.materialize(&action.root)?;
-        timer.stop();
+        let shared = self.store.share(&action.root)?;
+        if shared.made {
+            timer.stop();
+        }
+        let root = shared.path;
         if let Some(path) = action.inputs.keys().find(|path| exists_in(&root, path)) {
             return Err(ExecError::InputHidesRoot(path.clone()));
         }
