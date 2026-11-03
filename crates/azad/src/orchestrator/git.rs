@@ -1,6 +1,7 @@
 //! The commits that the orchestrator checks: fetched from the event's repository into a bare mirror that the
 //! orchestrator keeps, and checked out into a worktree for the run.
 
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -15,6 +16,7 @@ const BRANCH_PREFIX: &str = "refs/heads/";
 const TAGS_REFSPEC: &str = "+refs/tags/*:refs/tags/*";
 const MIRROR_NAME_LENGTH: usize = 16;
 const NO_CONFIG: &str = "/dev/null";
+const LOCK_EXTENSION: &str = "lock";
 
 #[derive(Debug, thiserror::Error)]
 #[error("git {command}: {reason}")]
@@ -55,6 +57,7 @@ pub(super) struct Fetch<'a> {
 
 impl Drop for Checkout {
     fn drop(&mut self) {
+        let Ok(_lock) = lock(&self.mirror) else { return };
         let dir = self.dir.display().to_string();
         git(&self.mirror, &["worktree", "remove", "--force", &dir]).ok();
     }
@@ -66,7 +69,10 @@ impl Drop for Checkout {
 pub(super) fn check_out(state: &Path, fetch: &Fetch<'_>, dir: &Path) -> Result<Checkout, GitError> {
     let Fetch { url, git_ref, sha, .. } = *fetch;
     let name = Digest::of_bytes(url.as_bytes()).hex();
-    let mirror = state.join(REPOSITORIES_DIR).join(format!("{}.git", &name[..MIRROR_NAME_LENGTH]));
+    let repositories = state.join(REPOSITORIES_DIR);
+    std::fs::create_dir_all(&repositories).map_err(|e| error("init", e.to_string()))?;
+    let mirror = repositories.join(format!("{}.git", &name[..MIRROR_NAME_LENGTH]));
+    let _lock = lock(&mirror)?;
     if !mirror.is_dir() {
         std::fs::create_dir_all(&mirror).map_err(|e| error("init", e.to_string()))?;
         git(&mirror, &["init", "--quiet", "--bare"])?;
@@ -84,6 +90,16 @@ pub(super) fn check_out(state: &Path, fetch: &Fetch<'_>, dir: &Path) -> Result<C
     let target = dir.display().to_string();
     git(&mirror, &["worktree", "add", "--quiet", "--detach", &target, sha])?;
     Ok(Checkout { mirror, dir: dir.to_path_buf() })
+}
+
+/// Holds the mirror for one change at a time, until the file is dropped: runs at the same time, in this process or in
+/// another, fetch into the same refs and write the same commit-graph, and git fails a change that meets another.
+fn lock(mirror: &Path) -> Result<File, GitError> {
+    let path = mirror.with_extension(LOCK_EXTENSION);
+    let file = OpenOptions::new().create(true).truncate(false).write(true).open(&path);
+    let file = file.map_err(|e| error("lock", format!("{}: {e}", path.display())))?;
+    file.lock().map_err(|e| error("lock", format!("{}: {e}", path.display())))?;
+    Ok(file)
 }
 
 /// Fetches the default branch to `DEFAULT_BRANCH_REF`; when it cannot be fetched, the ref is gone, so nothing is proved
@@ -179,6 +195,37 @@ mod tests {
         std::fs::write(checkout.path().join("tasks.star"), tasks).expect("a tasks.star");
         let package = evaluate(checkout.path(), "", "linux/amd64").expect("the package");
         assert_eq!(package.actions["//:v"].env["tags"], "{}", "a tag deleted at the origin is gone");
+    }
+
+    #[test]
+    fn runs_check_out_commits_of_one_repository_at_the_same_time() {
+        const RUNS: usize = 8;
+        let origin = tempfile::TempDir::new().expect("a directory");
+        let state = tempfile::TempDir::new().expect("a directory");
+        let repo = origin.path();
+        run(repo, &["init", "--quiet", "--initial-branch", "main"]);
+        run(repo, &["commit", "--quiet", "--allow-empty", "-m", "first"]);
+        let commits: Vec<(String, String)> = (0..RUNS)
+            .map(|n| {
+                let branch = format!("branch-{n}");
+                run(repo, &["checkout", "--quiet", "-B", &branch, "main"]);
+                run(repo, &["commit", "--quiet", "--allow-empty", "-m", &branch]);
+                run(repo, &["tag", &format!("v{n}")]);
+                (format!("{BRANCH_PREFIX}{branch}"), run(repo, &["rev-parse", "HEAD"]))
+            })
+            .collect();
+        let url = repo.display().to_string();
+
+        std::thread::scope(|scope| {
+            for (n, (git_ref, sha)) in commits.iter().enumerate() {
+                let (url, state) = (&url, state.path());
+                scope.spawn(move || {
+                    let fetch = Fetch { url, git_ref, sha, default_branch: Some("main"), header: None };
+                    let checkout = check_out(state, &fetch, &state.join(format!("run-{n}"))).expect("a checkout");
+                    assert_eq!(run(checkout.path(), &["rev-parse", "HEAD"]), *sha);
+                });
+            }
+        });
     }
 
     #[test]
