@@ -575,3 +575,36 @@ fn undeclared_paths_that_git_ignores_are_not_reported() {
     let counted = "//tool:scratch: discarded 2 paths that git ignores, such as tool/bin/";
     assert!(notes.iter().any(|note| note.starts_with(counted)), "a diagnostic note counts them: {notes:?}");
 }
+
+/// When an isolated task fails on files of a package that its sandbox did not hold, the run names that package once,
+/// whether the tool gave the path relative to the task or absolute in the sandbox; a file that the workspace does not
+/// have is no hint.
+#[test]
+fn a_failed_isolated_task_names_the_package_that_it_lacked() {
+    let dir = TempDir::new().unwrap();
+    let workspace = workspace(&dir);
+    init_git(&workspace);
+    fs::create_dir_all(workspace.join("lib/src")).unwrap();
+    fs::write(workspace.join("lib/tasks.star"), "").unwrap();
+    fs::write(workspace.join("lib/src/a.txt"), "a\n").unwrap();
+    let tool = workspace.join("tool");
+    fs::create_dir_all(&tool).unwrap();
+    let tasks = format!(
+        "task(name = \"read\", cmd = \"cat ../lib/src/a.txt /work/lib/src/a.txt ../lib/src/none.txt\", image = \
+         image({IMAGE:?}))\n"
+    );
+    fs::write(tool.join("tasks.star"), tasks).unwrap();
+    let engine = engine(&dir, true);
+    let goal = engine.load("//tool:read", &mut |_| {}).unwrap();
+    let mut notes = Vec::new();
+    engine
+        .run(&goal, 1, &mut |event| {
+            if let Event::Note(note) = event {
+                notes.push(note.text);
+            }
+        })
+        .unwrap();
+    let hints: Vec<&String> = notes.iter().filter(|note| note.contains("which its sandbox did not hold")).collect();
+    assert_eq!(hints.len(), 1, "{notes:?}");
+    assert!(hints[0].starts_with("//tool:read named files of //lib,"), "{}", hints[0]);
+}

@@ -6,6 +6,7 @@ mod api;
 mod config;
 mod error;
 mod git;
+mod missing;
 mod resolve;
 mod tasks;
 mod why;

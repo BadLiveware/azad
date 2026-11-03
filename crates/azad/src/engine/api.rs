@@ -28,6 +28,7 @@ const TOOLS_LOCATION: &str = "tools";
 /// Isolated runs of a goal have their own history, because their actions differ from those of host runs.
 const ISOLATED_HISTORY: &str = "isolated";
 use crate::engine::config::vm_config;
+use crate::engine::missing::{Mentions, Workspace};
 use crate::engine::tasks::DependencySources;
 use crate::engine::{EngineConfig, EngineError, Mode, SandboxKind, TextFrontend};
 
@@ -701,11 +702,27 @@ impl Engine {
         observe: &mut dyn FnMut(Event),
     ) -> Result<RunReport, EngineError> {
         let runner = Runner::new(&goal.graph, self.backend.as_ref(), parallelism);
+        let mut mentions = Mentions::default();
+        let workspace = || {
+            Ok(Workspace {
+                files: crate::engine::git::working_tree_files(&self.config.root)?,
+                packages: self.packages()?,
+            })
+        };
         let outcome = runner.run(&goal.key, &mut |progress| {
             let (progress, note) = self.without_ignored_scratch(progress);
+            mentions.see(&goal.graph, &progress);
+            let missing = mentions.missing_packages(&goal.graph, &progress, &workspace).unwrap_or_default();
+            let name = match &progress {
+                Progress::Done { name, .. } => goal.titles.get(name).unwrap_or(name).clone(),
+                _ => String::new(),
+            };
             observe(Event::Progress(progress));
             if let Some(text) = note {
                 observe(Event::Note(Note { level: NoteLevel::Diagnostic, text }));
+            }
+            for package in missing {
+                observe(Event::Note(Note { level: NoteLevel::Normal, text: missing_package_note(&name, &package) }));
             }
         })?;
         if let Some(text) = missing_host_tools(goal, &outcome) {
@@ -904,6 +921,14 @@ fn joined_lines(mut first: String, second: &str) -> String {
 const COMMAND_NOT_FOUND: i64 = 127;
 
 /// A note for the tasks with an image that failed because the host lacks a command, which their images have.
+/// What to say when a failed isolated action's output named files of a package that its sandbox did not hold.
+fn missing_package_note(action: &str, package: &str) -> String {
+    format!(
+        "{action} named files of {package}, which its sandbox did not hold: add {package} to the deps of its package \
+         and give the task `dependencies` (decision 0028), or add the files to its sources"
+    )
+}
+
 fn missing_host_tools(goal: &Goal, outcome: &Outcome) -> Option<String> {
     let failed: Vec<&String> = outcome
         .statuses
