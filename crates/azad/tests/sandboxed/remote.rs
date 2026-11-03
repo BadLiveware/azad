@@ -1,7 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-mod support;
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -9,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use crate::support::{ROOTFS_PATH, TEST_PROGRAMS, host_rootfs};
 use azad::ir::text;
 use azad::ir::{Digest, Graph, Image};
 use azad::local::LocalBackend;
@@ -17,7 +16,6 @@ use azad::sandbox::{Bubblewrap, Exit, Limits, Sandbox, SandboxError, SandboxSpec
 use azad::scheduler::{Runner, Status};
 use azad::store::{Selection, Store};
 use azad::timings::{NOTEWORTHY, Timings};
-use support::{ROOTFS_PATH, TEST_PROGRAMS, host_rootfs};
 use tempfile::TempDir;
 
 struct Counting {

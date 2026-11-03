@@ -79,7 +79,7 @@ Keep the direction of the dependencies:
 - Use ASD-STE100 Simplified Technical English: short sentences, one meaning per word, active voice.
 - Put each full sentence on its own line in Markdown.
 - Define an acronym the first time a page uses it: `IR (intermediate representation)`.
-- `docs/starlark.md` is made from the docstrings of the Starlark built-ins; change the docstrings, then make it again with `AZAD_UPDATE_REFERENCE=1 cargo test -p azad --test reference`.
+- `docs/starlark.md` is made from the docstrings of the Starlark built-ins; change the docstrings, then make it again with `AZAD_UPDATE_REFERENCE=1 cargo test -p azad --test sandbox_free reference`.
 
 ## Code
 

@@ -2,8 +2,6 @@
 //! that the repository names for them, at the trust level of the event.
 #![allow(clippy::unwrap_used)]
 
-mod support;
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -13,6 +11,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::support::{ROOTFS_PATH, TEST_PROGRAMS, host_rootfs};
 use azad::engine::{Engine, EngineConfig, Status, host_platform};
 use azad::executor::{ExecutorService, ServiceSandbox};
 use azad::ir::Image;
@@ -23,7 +22,6 @@ use azad::orchestrator::{
 use azad::sandbox::Limits;
 use azad::store::{Selection, Store};
 use azad::trust::Trust;
-use support::{ROOTFS_PATH, TEST_PROGRAMS, host_rootfs};
 use tempfile::TempDir;
 
 const SECRET: &[u8] = b"a shared secret";
@@ -260,7 +258,7 @@ fn a_tag_on_the_default_branch_runs_as_main_and_another_tag_writes_nothing() {
 }
 
 const APP_ID: &str = "12345";
-const APP_KEY: &str = include_str!("data/github-app-test-key.pem");
+const APP_KEY: &str = include_str!("../data/github-app-test-key.pem");
 const INSTALLATION_TOKEN: &str = "ghs_installation";
 
 /// A call to the fake GitHub API.

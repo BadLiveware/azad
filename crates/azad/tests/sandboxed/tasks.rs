@@ -1,20 +1,18 @@
 //! Tasks (decision 0015): the same definition runs on the host for a local run, and in its image for an isolated run.
 #![allow(clippy::unwrap_used)]
 
-mod support;
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::support::{ROOTFS_PATH, TEST_PROGRAMS, host_rootfs};
 use azad::engine::{Engine, EngineConfig, Event, Progress, Status, host_platform};
 use azad::frontend::gha::annotation::Annotation;
 use azad::ir::{Digest, Image};
 use azad::oci::Puller;
 use azad::sandbox::Limits;
 use azad::store::{Selection, Store};
-use support::{ROOTFS_PATH, TEST_PROGRAMS, host_rootfs};
 use tempfile::TempDir;
 
 const IMAGE: &str = "tools@sha256:00000000000000000000000000000000000000000000000000000000000000bb";

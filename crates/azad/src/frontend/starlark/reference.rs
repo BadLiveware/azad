@@ -15,7 +15,7 @@ use crate::frontend::starlark::values::ActionValue;
 
 const INTRODUCTION: &str = "\
 <!-- Made from the docstrings in crates/azad/src/frontend/starlark/; do not edit. \
-To make it again: AZAD_UPDATE_REFERENCE=1 cargo test -p azad --test reference -->
+To make it again: AZAD_UPDATE_REFERENCE=1 cargo test -p azad --test sandbox_free reference -->
 
 # Starlark built-ins
 

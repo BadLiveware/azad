@@ -1,18 +1,16 @@
 #![allow(clippy::unwrap_used)]
 
-mod support;
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::time::Duration;
 
+use crate::support::{ROOTFS_PATH, TEST_PROGRAMS, host_rootfs};
 use azad::engine::{Engine, EngineConfig, Event, Status, host_platform};
 use azad::ir::Image;
 use azad::oci::Puller;
 use azad::remote::{DirectoryProvider, PublicKey, RemoteConfig, SigningKey};
 use azad::sandbox::Limits;
 use azad::store::{Selection, Store};
-use support::{ROOTFS_PATH, TEST_PROGRAMS, host_rootfs};
 use tempfile::TempDir;
 
 fn engine(dir: &TempDir) -> Engine {

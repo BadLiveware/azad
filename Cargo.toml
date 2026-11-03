@@ -10,6 +10,11 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/BadLiveware/azad"
 publish = false
 
+# Line tables are enough for a panic's file and line; full debug info made each test binary hundreds of megabytes, and
+# linking them all at once overloaded the disk.
+[profile.dev]
+debug = "line-tables-only"
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_debug_implementations = "warn"

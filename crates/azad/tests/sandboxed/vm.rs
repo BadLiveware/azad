@@ -7,8 +7,6 @@
 //! unless `$AZAD_VM_TESTS` is set, as in CI, where a missing part fails the test.
 #![allow(clippy::unwrap_used)]
 
-mod support;
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, OpenOptions};
@@ -18,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use crate::support::{ROOTFS_PATH, TEST_PROGRAMS, host_rootfs};
 use azad::engine::GUEST;
 use azad::executor::{ExecutorClient, ExecutorService, ServiceSandbox};
 use azad::ir::{Action, Digest, Kind, Spec};
@@ -27,7 +26,6 @@ use azad::sandbox::{Bubblewrap, Limits, MicroVm, SandboxError, VmConfig};
 use azad::scheduler::Backend;
 use azad::store::{Selection, Store};
 use azad::trust::Trust;
-use support::{ROOTFS_PATH, TEST_PROGRAMS, host_rootfs};
 use tempfile::TempDir;
 
 const REQUIRE_ENV: &str = "AZAD_VM_TESTS";
