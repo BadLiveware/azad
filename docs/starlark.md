@@ -530,7 +530,7 @@ What the package says of itself for the packages that depend on it (decision 002
 
 * `exports`: (defaults to: `[]`)
 
-  Patterns of the files that the package gives the tasks that depend on it, relative to it, such as `["**/*.cs", "**/*.csproj"]`; by default, all that git tracks or would track. Fewer files run fewer dependents again.
+  Patterns of the files that the package gives the tasks that depend on it, relative to it, such as `["**/*.cs", "**/*.csproj"]`; by default, all that git tracks or would track below its directory, the files of the packages nested in it too. Fewer files run fewer dependents again.
 
 * `provides`: (defaults to: `[]`)
 
@@ -709,7 +709,7 @@ A task (decision 0015): work described by the files of the workspace, which runs
 
 * `sources`: (defaults to: `[]`)
 
-  Patterns of the files that the task reads, relative to the package, as for `glob()`; or, after `//`, relative to the workspace's root, such as `//libs/core/**` for a project that this one builds from source (decision 0026). An isolated run has them at the same paths, and they are part of the digest.
+  Patterns of the files that the task reads, relative to the package, as for `glob()`; or, after `//`, relative to the workspace's root, such as `//libs/core/**` for a project that this one builds from source (decision 0026). An isolated run has them at the same paths, and they are part of the digest. A pattern such as `**` also matches the files of the packages in the directories below this one, so the task needs no dependency on them; leave them out with `exclude` when it does not read them, or they run it again when they change.
 
 * `exclude`: (defaults to: `[]`)
 

@@ -433,7 +433,10 @@ pub(crate) fn azad_globals(builder: &mut GlobalsBuilder) {
     /// * `cmd`: One line that the shell runs, or a list of words: the program and its arguments.
     /// * `sources`: Patterns of the files that the task reads, relative to the package, as for `glob()`; or, after
     ///   `//`, relative to the workspace's root, such as `//libs/core/**` for a project that this one builds from
-    ///   source (decision 0026). An isolated run has them at the same paths, and they are part of the digest.
+    ///   source (decision 0026). An isolated run has them at the same paths, and they are part of the digest. A
+    ///   pattern such as `**` also matches the files of the packages in the directories below this one, so the task
+    ///   needs no dependency on them; leave them out with `exclude` when it does not read them, or they run it again
+    ///   when they change.
     /// * `exclude`: Patterns of files to leave out of `sources`, in the same two forms.
     /// * `generates`: Directories that the task writes, relative to the package, for the tasks after it.
     /// * `deps`: Tasks that must succeed first; the task reads what they generate, at their paths. A task of this file
@@ -675,8 +678,8 @@ pub(crate) fn azad_globals(builder: &mut GlobalsBuilder) {
     ///   tasks of packages, such as `"//libs/core:contracts"`. A task with `dependencies = True` reads them, and
     ///   what they depend on, so a package names only its own dependencies.
     /// * `exports`: Patterns of the files that the package gives the tasks that depend on it, relative to it, such as
-    ///   `["**/*.cs", "**/*.csproj"]`; by default, all that git tracks or would track. Fewer files run fewer
-    ///   dependents again.
+    ///   `["**/*.cs", "**/*.csproj"]`; by default, all that git tracks or would track below its directory, the files
+    ///   of the packages nested in it too. Fewer files run fewer dependents again.
     /// * `provides`: Tasks of the package, by name, whose outputs the tasks that depend on it get, such as the build of
     ///   a library; they run first.
     ///
