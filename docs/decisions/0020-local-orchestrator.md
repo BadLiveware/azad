@@ -53,3 +53,7 @@ A pull request runs code that its author wrote; if its results went into the cac
 ## Amendment, 2026-11-03
 
 Decision 0029 makes the orchestrator its own binary: `azad serve`, `azad simulate` and `azad checks` are now `azad-orchestrator serve`, `simulate` and `checks`, and it no longer reads personal defaults.
+
+## Amendment, 2026-11-03: GitHub
+
+Decision 0032 adds the client of GitHub's API, as a GitHub App, and gives a tag the trust level `main` when the default branch holds its commit.

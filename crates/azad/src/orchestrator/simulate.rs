@@ -59,6 +59,19 @@ impl Simulator {
         })
     }
 
+    /// A push of the tag `tag`, at the commit that it names.
+    pub fn tag(&self, tag: &str) -> Result<String, SimulateError> {
+        let git_ref = format!("refs/tags/{tag}");
+        let head_sha = self.git(&["rev-parse", "--verify", &format!("{git_ref}^{{commit}}")])?;
+        self.send(&Event {
+            kind: EventKind::Push,
+            repository: self.repository(),
+            git_ref,
+            head_sha,
+            pull_request: None,
+        })
+    }
+
     /// Pull request `number` from `branch`, at the commit that the branch holds now: when it is opened, and when it
     /// gets a new commit.
     pub fn pull_request(&self, number: u64, branch: &str) -> Result<String, SimulateError> {

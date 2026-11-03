@@ -1,13 +1,14 @@
 //! `azad-orchestrator`: Azad's orchestrator (decision 0020). It takes GitHub's webhooks, runs the goals that name the
 //! event at the event's trust level, and writes check runs; `simulate` sends it events from a local repository.
 
+use std::fs;
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, bail};
 use azad::EngineConfig;
-use azad::orchestrator::{self, Orchestrator, Simulator};
+use azad::orchestrator::{self, GITHUB_API, GitHubApp, Orchestrator, Simulator};
 use clap::{Parser, Subcommand};
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:8484";
@@ -41,6 +42,16 @@ enum OrchestratorCommand {
         /// The address on which to listen.
         #[arg(long, default_value = DEFAULT_LISTEN)]
         listen: String,
+        /// The ID of a GitHub App, whose installations get check runs on GitHub, and whose private repositories are
+        /// fetched with its token (decision 0032). Without it, check runs go to the fake GitHub in the store.
+        #[arg(long, requires = "github_app_key")]
+        github_app_id: Option<String>,
+        /// The file of the GitHub App's private key, in PEM, as GitHub gives it to download.
+        #[arg(long, requires = "github_app_id")]
+        github_app_key: Option<PathBuf>,
+        /// GitHub's REST API.
+        #[arg(long, default_value = GITHUB_API)]
+        github_api: String,
     },
     /// Send an event from the workspace's git repository to `serve`, as GitHub would, signed with the secret in
     /// $AZAD_WEBHOOK_SECRET.
@@ -62,6 +73,8 @@ enum OrchestratorCommand {
 enum SimulatedEvent {
     /// A push of a branch, at the commit that it holds now. The default is the branch that is checked out.
     Push { branch: Option<String> },
+    /// A push of a tag. It runs at the trust level main when the default branch holds its commit, and else at none.
+    Tag { tag: String },
     /// A pull request from a branch, when it is opened or gets a new commit. The default is the branch that is checked
     /// out.
     PullRequest { number: u64, branch: Option<String> },
@@ -81,11 +94,22 @@ fn run(cli: Cli) -> Result<()> {
     let mut config = EngineConfig::from_environment(cli.store, cli.root)?;
     config.executor = cli.executor;
     match cli.command {
-        OrchestratorCommand::Serve { listen } => serve(config, &listen),
+        OrchestratorCommand::Serve { listen, github_app_id, github_app_key, github_api } => {
+            let app = match (github_app_id, github_app_key) {
+                (Some(id), Some(key)) => Some(github_app(&id, &key, &github_api)?),
+                _ => None,
+            };
+            serve(config, &listen, app)
+        }
         OrchestratorCommand::Simulate { event: SimulatedEvent::Push { branch }, server, default_branch } => {
             let branch = branch_or_current(&config, branch)?;
             let answer = simulator(&config, &server, &default_branch)?.push(&branch)?;
             eprintln!("azad-orchestrator: pushed {branch}: {answer}");
+            Ok(())
+        }
+        OrchestratorCommand::Simulate { event: SimulatedEvent::Tag { tag }, server, default_branch } => {
+            let answer = simulator(&config, &server, &default_branch)?.tag(&tag)?;
+            eprintln!("azad-orchestrator: pushed the tag {tag}: {answer}");
             Ok(())
         }
         OrchestratorCommand::Simulate {
@@ -109,11 +133,23 @@ fn webhook_secret() -> Result<Vec<u8>> {
     }
 }
 
-fn serve(config: EngineConfig, listen: &str) -> Result<()> {
+fn github_app(id: &str, key: &Path, api: &str) -> Result<GitHubApp> {
+    let pem = fs::read_to_string(key).with_context(|| format!("reading the GitHub App's key {}", key.display()))?;
+    Ok(GitHubApp::new(id, &pem, api)?)
+}
+
+fn serve(config: EngineConfig, listen: &str, app: Option<GitHubApp>) -> Result<()> {
     let secret = webhook_secret()?;
     let listener = TcpListener::bind(listen).with_context(|| format!("listening on {listen}"))?;
     eprintln!("azad-orchestrator: webhooks to http://{}{}", listener.local_addr()?, orchestrator::WEBHOOK_PATH);
-    Orchestrator::new(config, &secret).serve(&listener)?;
+    let orchestrator = match app {
+        Some(app) => {
+            eprintln!("azad-orchestrator: check runs go to GitHub through {app:?}");
+            Orchestrator::with_github(config, &secret, app)
+        }
+        None => Orchestrator::new(config, &secret),
+    };
+    orchestrator.serve(&listener)?;
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 //! Check runs, as GitHub has them: one for each goal on a commit, which is queued, in progress, and then completed with
 //! a conclusion. Locally they go to a fake GitHub, which keeps them in files that `azad-orchestrator checks` shows; a
-//! client of GitHub's API takes the same calls later.
+//! GitHub App (`github::GitHubApp`) takes the same calls through GitHub's API.
 
 use std::fmt;
 use std::fs;
@@ -59,7 +59,14 @@ impl fmt::Display for CheckRun {
 pub trait CheckRuns: Send + Sync + fmt::Debug {
     /// Creates a queued check run, and returns its ID.
     fn create(&self, repository: &str, head_sha: &str, name: &str) -> io::Result<u64>;
-    fn update(&self, id: u64, status: CheckStatus, conclusion: Option<Conclusion>, summary: &str) -> io::Result<()>;
+    fn update(
+        &self,
+        repository: &str,
+        id: u64,
+        status: CheckStatus,
+        conclusion: Option<Conclusion>,
+        summary: &str,
+    ) -> io::Result<()>;
 }
 
 /// Check runs in files, one for each, named by its ID.
@@ -128,7 +135,14 @@ impl CheckRuns for FakeGitHub {
         Ok(id)
     }
 
-    fn update(&self, id: u64, status: CheckStatus, conclusion: Option<Conclusion>, summary: &str) -> io::Result<()> {
+    fn update(
+        &self,
+        _repository: &str,
+        id: u64,
+        status: CheckStatus,
+        conclusion: Option<Conclusion>,
+        summary: &str,
+    ) -> io::Result<()> {
         let mut run = read(&self.path(id))?;
         run.status = status;
         run.conclusion = conclusion;

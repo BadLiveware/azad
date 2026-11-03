@@ -200,6 +200,7 @@ dependencies = [
  "jiff",
  "libc",
  "proptest",
+ "ring",
  "roxmltree",
  "semver",
  "serde",

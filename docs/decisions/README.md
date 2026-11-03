@@ -36,3 +36,4 @@ A decision is not edited after it is made; a later decision replaces it and says
 | [0029](0029-one-binary-for-each-kind-of-user.md) | One binary for each kind of user | Accepted, 2026-11-03 |
 | [0030](0030-azad-releases-itself.md) | Azad releases itself | Accepted, 2026-11-03 |
 | [0031](0031-project-files-and-ecosystem-modules.md) | Built-ins that read project files, and ecosystem modules in the standard library | Accepted, 2026-11-03 |
+| [0032](0032-orchestrator-on-github.md) | The orchestrator on GitHub, through a GitHub App; a tag on the default branch runs as main | Accepted, 2026-11-03 |

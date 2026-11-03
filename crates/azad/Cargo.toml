@@ -25,6 +25,7 @@ globset = "0.4.21"
 hmac = "0.13"
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 libc = "0.2.191"
+ring = "0.17.14"
 roxmltree = "0.21.2"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }

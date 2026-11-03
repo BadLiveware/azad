@@ -1,7 +1,7 @@
 //! The orchestrator (decision 0020): it takes GitHub's webhooks for pushes and pull requests, keeps a run for each
 //! event in durable state, runs the goals that the repository names for the event at the event's trust level, and
-//! writes a check run for each goal. Locally, check runs go to a fake GitHub (`checks::FakeGitHub`), and `Simulator`
-//! sends events from a local git repository.
+//! writes a check run for each goal. Check runs go to GitHub through a GitHub App (decision 0032), or locally to a
+//! fake GitHub (`checks::FakeGitHub`), to which `Simulator` sends events from a local git repository.
 //!
 //! Goals run in their images, as in CI, never with the host's tools: an event runs code that anyone who can push or
 //! open a pull request wrote.
@@ -9,6 +9,7 @@
 mod checks;
 mod event;
 mod git;
+mod github;
 mod http;
 mod runs;
 mod signature;
@@ -16,6 +17,7 @@ mod simulate;
 
 pub use checks::{CheckRun, CheckRuns, CheckStatus, Conclusion, FakeGitHub};
 pub use event::{Event, EventKind, Repository};
+pub use github::{GITHUB_API, GitHubApp, GitHubError};
 pub use http::Response;
 pub use signature::{SIGNATURE_HEADER, sign};
 pub use simulate::{SimulateError, Simulator};
@@ -24,13 +26,14 @@ use std::collections::BTreeMap;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use crate::engine::{Engine, EngineConfig, Status};
 use crate::ir::Kind;
 use crate::scheduler::Outcome;
+use crate::trust::Trust;
 
 const ORCHESTRATOR_DIR: &str = "orchestrator";
 const GITHUB_DIR: &str = "github";
@@ -40,6 +43,7 @@ pub const WEBHOOK_PATH: &str = "/webhook";
 const EVENT_HEADER: &str = "x-github-event";
 const DELIVERY_HEADER: &str = "x-github-delivery";
 const POST: &str = "POST";
+const TAG_PREFIX: &str = "refs/tags/";
 /// How many actions of a goal run at the same time.
 const PARALLELISM: usize = 4;
 /// How long the worker waits for a new event before it looks at the runs again.
@@ -62,6 +66,8 @@ pub struct Orchestrator {
     secret: Vec<u8>,
     runs: runs::Runs,
     checks: Box<dyn CheckRuns>,
+    /// The App that writes check runs on GitHub and fetches its repositories; none for the fake GitHub.
+    github: Option<Arc<GitHubApp>>,
     new_events: (Mutex<bool>, Condvar),
 }
 
@@ -73,12 +79,19 @@ impl Orchestrator {
         let state = state_dir(&store);
         Orchestrator {
             checks: Box::new(fake_github(&store)),
+            github: None,
             runs: runs::Runs::new(&state),
             state,
             engine,
             secret: secret.to_vec(),
             new_events: (Mutex::new(false), Condvar::new()),
         }
+    }
+
+    /// As `new`, with check runs on GitHub through `app`, which also fetches the repositories of its installations.
+    pub fn with_github(engine: EngineConfig, secret: &[u8], app: GitHubApp) -> Self {
+        let app = Arc::new(app);
+        Orchestrator { checks: Box::new(app.clone()), github: Some(app), ..Orchestrator::new(engine, secret) }
     }
 
     /// Takes deliveries on `listener`, and runs what they ask for, until the listener fails. Runs that were not done
@@ -172,7 +185,9 @@ impl Orchestrator {
             if let Ok(Some(checks)) = self.runs.checks(id) {
                 for check in checks.values() {
                     let summary = format!("the orchestrator could not run the goal: {e}");
-                    self.checks.update(*check, CheckStatus::Completed, Some(Conclusion::Failure), &summary).ok();
+                    let repository = &event.repository.full_name;
+                    let failure = Some(Conclusion::Failure);
+                    self.checks.update(repository, *check, CheckStatus::Completed, failure, &summary).ok();
                 }
             }
         }
@@ -184,12 +199,23 @@ impl Orchestrator {
     fn try_process(&self, id: u64, event: &Event) -> Result<(), String> {
         let dir = self.state.join(CHECKOUTS_DIR).join(id.to_string());
         std::fs::create_dir_all(dir.parent().unwrap_or(&dir)).map_err(|e| e.to_string())?;
-        let checkout = git::check_out(&self.state, &event.repository.clone_url, &event.git_ref, &event.head_sha, &dir)
-            .map_err(|e| e.to_string())?;
+        let repository = &event.repository.full_name;
+        let header = match &self.github {
+            Some(app) => Some(app.git_header(repository).map_err(|e| e.to_string())?),
+            None => None,
+        };
+        let fetch = git::Fetch {
+            url: &event.repository.clone_url,
+            git_ref: &event.git_ref,
+            sha: &event.head_sha,
+            default_branch: &event.repository.default_branch,
+            header,
+        };
+        let checkout = git::check_out(&self.state, &fetch, &dir).map_err(|e| e.to_string())?;
         let config = EngineConfig {
             root: checkout.path().to_path_buf(),
             isolated: true,
-            trust: event.trust(),
+            trust: trust(event, &checkout),
             color: false,
             force: false,
             ..self.engine.clone()
@@ -197,10 +223,10 @@ impl Orchestrator {
         let engine = Engine::new(config).map_err(|e| e.to_string())?;
         let checks = self.check_runs(id, event, &engine)?;
         for (goal, check) in &checks {
-            self.checks.update(*check, CheckStatus::InProgress, None, "").map_err(|e| e.to_string())?;
+            self.checks.update(repository, *check, CheckStatus::InProgress, None, "").map_err(|e| e.to_string())?;
             let (conclusion, summary) = run_goal(&engine, goal);
             self.checks
-                .update(*check, CheckStatus::Completed, Some(conclusion), &summary)
+                .update(repository, *check, CheckStatus::Completed, Some(conclusion), &summary)
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -223,6 +249,17 @@ impl Orchestrator {
         }
         self.runs.set_checks(id, &checks).map_err(|e| e.to_string())?;
         Ok(checks)
+    }
+}
+
+/// The trust level of the event's runs: the event's own, but a tag whose commit the default branch holds runs as
+/// `main`, because `main` already ran that code.
+fn trust(event: &Event, checkout: &git::Checkout) -> Trust {
+    match event.trust() {
+        Trust::None if event.git_ref.starts_with(TAG_PREFIX) && checkout.is_on_default_branch(&event.head_sha) => {
+            Trust::Main
+        }
+        trust => trust,
     }
 }
 
