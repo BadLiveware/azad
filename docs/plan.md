@@ -31,19 +31,7 @@ Azad is tried on two repositories:
 
 ## Next
 
-### 1. Real GitHub
-
-The orchestrator of decision 0020 against GitHub itself.
-
-- A GitHub App on a test repository: webhooks, check runs through the real API, and the repository's mirror.
-- Or the orchestrator nested in a GHA job, for repositories that cannot install the App.
-- The trust level of a tag comes from proof that its commit is on the default branch.
-
-The orchestrator runs in the development host (`dev/host/`), so that code from events never runs on a developer's machine.
-
-Done when: a pull request on a real repository gets Azad's check runs, a push to the default branch fills the cache, and a later pull request gets hits from it but never writes to the default branch's cache.
-
-### 2. Gaps that the monorepo found
+### 1. Gaps that the monorepo found
 
 Smaller items; each one is done when the monorepo no longer needs its workaround.
 
@@ -53,7 +41,7 @@ Smaller items; each one is done when the monorepo no longer needs its workaround
 - A check that a task's declared sources hold what it reads, from a trace in the sandbox, so that declarations cannot drift from what the tools read.
   Dependencies can now come from project files (decision 0031): `.csproj`, uv `pyproject.toml` and `package.json`, so `package(deps = ...)` does not drift from them; the sources of a task can still drift.
 
-### 3. Hosts
+### 2. Hosts
 
 The executor on machines that Azad owns.
 
@@ -62,27 +50,27 @@ The executor on machines that Azad owns.
 
 Done when: a goal runs on a host through the plan, and CI runs the VM tests.
 
-### 4. The planner
+### 3. The planner
 
 Grouping, placement where the inputs are, and sizing from history.
 
-### 5. Remote execution
+### 4. Remote execution
 
 Several hosts, and a shared action cache with trust levels for each result.
 
-### 6. Targets
+### 5. Targets
 
 Ordered access, memory of what was applied, promotion, and plans bound to their review (see "Later: state outside the build" in `docs/vision.md`).
 
-### 7. The merge queue
+### 6. The merge queue
 
 Entries, a speculative base, batches, and bisection that reuses results.
 
-### 8. Policy and trust
+### 7. Policy and trust
 
 Who may run what, central gates that a repository cannot remove, and secrets for impure actions.
 
-### 9. Logs and history
+### 8. Logs and history
 
 A live log stream, stored logs, and runs as a dataset.
 
@@ -101,6 +89,9 @@ Things that are not done, from earlier work; each one is taken when a use needs 
 - **Caches.**
   A producer does not run again when the cache dropped its content after its entry was checked (decision 0012).
   No limits on what a cache holds, and no OCI registry or object store providers.
+- **GitHub.**
+  The orchestrator works as a GitHub App only; it does not run nested in a GHA job yet, for a repository that cannot install the App.
+  It runs a goal once for each event, so a goal with `on = ["push", "pull_request"]` runs twice for the commit of a pull request from a branch of the same repository.
 - **Runs.**
   The executions of a local run live in memory, so a run does not survive a restart of `azad`.
   Azad's own goals do not name events, because its sandbox tests run on the host.
@@ -122,3 +113,4 @@ Things that are not done, from earlier work; each one is taken when a use needs 
 | M8: CI of our own, locally | 2026-11-01 | The microVM sandbox, the executor service, and the local orchestrator |
 | A monorepo | 2026-11-02 | Versions from git history, targets across packages, tasks in images on the working tree, parts, `tasks.yaml`, and the dependency graph |
 | Releases | 2026-11-03 | Azad releases and versions itself, its CI runs on its latest release, and the Azad action installs a release |
+| Real GitHub | 2026-11-03 | The orchestrator as a GitHub App on a private repository, through the development host: check runs, fetches with the App's token, and tags on the default branch as `main` |

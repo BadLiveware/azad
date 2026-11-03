@@ -42,7 +42,7 @@ enum OrchestratorCommand {
         /// The address on which to listen.
         #[arg(long, default_value = DEFAULT_LISTEN)]
         listen: String,
-        /// The ID of a GitHub App, whose installations get check runs on GitHub, and whose private repositories are
+        /// The client ID or the ID of a GitHub App, whose installations get check runs on GitHub, and whose private repositories are
         /// fetched with its token (decision 0032). Without it, check runs go to the fake GitHub in the store.
         #[arg(long, requires = "github_app_key")]
         github_app_id: Option<String>,
