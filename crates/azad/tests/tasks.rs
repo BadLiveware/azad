@@ -608,3 +608,24 @@ fn a_failed_isolated_task_names_the_package_that_it_lacked() {
     assert_eq!(hints.len(), 1, "{notes:?}");
     assert!(hints[0].starts_with("//tool:read named files of //lib,"), "{}", hints[0]);
 }
+
+/// `azad check` says when a package declares `deps` that none of its tasks reads (decision 0028).
+#[test]
+fn check_reports_deps_that_no_task_reads() {
+    let dir = TempDir::new().unwrap();
+    let workspace = workspace(&dir);
+    fs::create_dir_all(workspace.join("lib")).unwrap();
+    fs::write(workspace.join("lib/tasks.star"), "").unwrap();
+    let tool = workspace.join("tool");
+    fs::create_dir_all(&tool).unwrap();
+    let check = |dependencies: &str| {
+        let tasks = format!("package(deps = [\"//lib\"])\ntask(name = \"lint\", cmd = \"true\"{dependencies})\n");
+        fs::write(tool.join("tasks.star"), tasks).unwrap();
+        let findings = engine(&dir, false).check("//tool:lint").unwrap();
+        findings.into_iter().map(|finding| format!("{} {}", finding.location, finding.message)).collect::<Vec<_>>()
+    };
+    let unread = check("");
+    assert!(unread.iter().any(|finding| finding.starts_with("//tool no task reads its deps //lib")), "{unread:?}");
+    let read = check(", dependencies = True");
+    assert!(read.iter().all(|finding| !finding.contains("no task reads")), "{read:?}");
+}

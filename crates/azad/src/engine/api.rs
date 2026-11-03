@@ -573,6 +573,7 @@ impl Engine {
             .map_err(|source| EngineError::Frontend { frontend: frontend.name(), error: source })?;
         if let Ok(loaded) = frontend.load(&request) {
             findings.extend(self.missing_tools(&loaded.package));
+            findings.extend(unread_dependencies(&loaded.package));
             findings.extend(self.containers(loaded.package)?);
         }
         findings.sort_by(|a, b| a.severity.cmp(&b.severity).then_with(|| a.location.cmp(&b.location)));
@@ -921,6 +922,23 @@ fn joined_lines(mut first: String, second: &str) -> String {
 const COMMAND_NOT_FOUND: i64 = 127;
 
 /// A note for the tasks with an image that failed because the host lacks a command, which their images have.
+/// A package that declares `deps` that no task of it reads (decision 0028): only a task with `dependencies` gets them.
+fn unread_dependencies(package: &Package) -> Option<Finding> {
+    let deps = &package.declared.deps;
+    if deps.is_empty() || package.tasks.values().any(|task| task.dependencies != Dependencies::None) {
+        return None;
+    }
+    let location = package.tasks.keys().next().map(|label| label.split(':').next().unwrap_or(label).to_owned());
+    Some(Finding {
+        severity: Severity::Ignored,
+        location: location.unwrap_or_default(),
+        message: format!(
+            "no task reads its deps {}: only a task with `dependencies` gets them (decision 0028)",
+            join(deps.iter())
+        ),
+    })
+}
+
 /// What to say when a failed isolated action's output named files of a package that its sandbox did not hold.
 fn missing_package_note(action: &str, package: &str) -> String {
     format!(
