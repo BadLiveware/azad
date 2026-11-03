@@ -73,7 +73,9 @@ Who may run what, central gates that a repository cannot remove, and secrets for
 
 ### 8. Logs and history
 
-A live log stream, stored logs, and runs as a dataset.
+- Done: each run's record holds its goals, its steps and their whole output (decision 0034); check runs show the steps, metrics and the end of the output (decision 0033); and `azad-site` shows the runs, a timeline of their steps, and each step's whole output, live while it runs.
+- Runs as a dataset: the history of a goal's time, its cache hits and its failures, across runs, on the site.
+- How long records and stores are kept, and what removes them.
 
 ## Known debts
 
@@ -93,6 +95,10 @@ Things that are not done, from earlier work; each one is taken when a use needs 
 - **GitHub.**
   The orchestrator works as a GitHub App only; it does not run nested in a GHA job yet, for a repository that cannot install the App.
   It runs a goal once for each event, so a goal with `on = ["push", "pull_request"]` runs twice for the commit of a pull request from a branch of the same repository.
+- **The site.**
+  `azad-site` is not in the releases yet: only the development host's `deploy` builds it.
+  CI checks its server half with the workspace, but not its browser half, which needs `cargo-leptos`.
+  A cached step has no time, because a result does not store how long its action took.
 - **Runs.**
   The executions of a local run live in memory, so a run does not survive a restart of `azad`.
   Azad's own goals do not name events, because its sandbox tests run on the host.
@@ -115,3 +121,4 @@ Things that are not done, from earlier work; each one is taken when a use needs 
 | A monorepo | 2026-11-02 | Versions from git history, targets across packages, tasks in images on the working tree, parts, `tasks.yaml`, and the dependency graph |
 | Releases | 2026-11-03 | Azad releases and versions itself, its CI runs on its latest release, and the Azad action installs a release |
 | Real GitHub | 2026-11-03 | The orchestrator as a GitHub App on a private repository, through the development host: check runs, fetches with the App's token, and tags on the default branch as `main` |
+| Check runs and a site | 2026-11-03 | A check run shows a goal's steps, metrics and output; a record of each run; `azad-site` in Leptos, with live logs, on the development host |
