@@ -11,11 +11,12 @@ mod event;
 mod git;
 mod github;
 mod http;
+mod report;
 mod runs;
 mod signature;
 mod simulate;
 
-pub use checks::{CheckRun, CheckRuns, CheckStatus, Conclusion, FakeGitHub};
+pub use checks::{CheckOutput, CheckRun, CheckRuns, CheckStatus, Conclusion, FakeGitHub};
 pub use event::{Event, EventKind, Repository};
 pub use github::{GITHUB_API, GitHubApp, GitHubError};
 pub use http::Response;
@@ -28,11 +29,11 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::engine::{Engine, EngineConfig, Status};
 use crate::ir::Kind;
-use crate::scheduler::Outcome;
+
 use crate::trust::Trust;
 
 const ORCHESTRATOR_DIR: &str = "orchestrator";
@@ -48,6 +49,8 @@ const TAG_PREFIX: &str = "refs/tags/";
 const PARALLELISM: usize = 4;
 /// How long the worker waits for a new event before it looks at the runs again.
 const IDLE_CHECK: Duration = Duration::from_secs(30);
+/// How often a running goal's check run shows its progress, within GitHub's rate limit.
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Where the orchestrator of a store keeps its state.
 pub fn state_dir(store: &Path) -> PathBuf {
@@ -184,10 +187,10 @@ impl Orchestrator {
             eprintln!("azad-orchestrator: run {id} failed: {e}");
             if let Ok(Some(checks)) = self.runs.checks(id) {
                 for check in checks.values() {
-                    let summary = format!("the orchestrator could not run the goal: {e}");
+                    let output = CheckOutput::line("The orchestrator could not run the goal", &e);
                     let repository = &event.repository.full_name;
                     let failure = Some(Conclusion::Failure);
-                    self.checks.update(repository, *check, CheckStatus::Completed, failure, &summary).ok();
+                    self.checks.update(repository, *check, CheckStatus::Completed, failure, &output).ok();
                 }
             }
         }
@@ -223,13 +226,64 @@ impl Orchestrator {
         let engine = Engine::new(config).map_err(|e| e.to_string())?;
         let checks = self.check_runs(id, event, &engine)?;
         for (goal, check) in &checks {
-            self.checks.update(repository, *check, CheckStatus::InProgress, None, "").map_err(|e| e.to_string())?;
-            let (conclusion, summary) = run_goal(&engine, goal);
+            let (conclusion, output) = self.run_goal(&engine, goal, repository, *check)?;
             self.checks
-                .update(repository, *check, CheckStatus::Completed, Some(conclusion), &summary)
+                .update(repository, *check, CheckStatus::Completed, Some(conclusion), &output)
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+
+    /// Runs a goal, shows its steps on its check run while it runs, and says how it ended.
+    fn run_goal(
+        &self,
+        engine: &Engine,
+        target: &str,
+        repository: &str,
+        check: u64,
+    ) -> Result<(Conclusion, CheckOutput), String> {
+        let started = CheckOutput::line("Starting", "The goal is loaded and its steps are found.");
+        self.checks.update(repository, check, CheckStatus::InProgress, None, &started).map_err(|e| e.to_string())?;
+        let goal = match engine.load(target, &mut |_| {}) {
+            Ok(goal) => goal,
+            Err(e) => return Ok((Conclusion::Failure, CheckOutput::line("The goal cannot be loaded", &e.to_string()))),
+        };
+        if let Some(label) = goal.graph.actions.iter().find(|(_, action)| matches!(action.kind, Kind::Host { .. })) {
+            let title = format!("{} would run with the host's tools", label.0);
+            let reason = "The orchestrator runs actions only in sandboxes, because an event runs code that anyone who can \
+                          push or open a pull request wrote. Give the task an image.";
+            return Ok((Conclusion::Failure, CheckOutput::line(&title, reason)));
+        }
+        let mut report = report::GoalReport::new(goal.graph.actions.keys());
+        let mut shown = Instant::now();
+        let ran = engine.run(&goal, PARALLELISM, &mut |event| {
+            let crate::engine::Event::Progress(progress) = &event else { return };
+            report.see(progress);
+            if shown.elapsed() >= PROGRESS_INTERVAL {
+                shown = Instant::now();
+                if let Err(e) = self.checks.update(repository, check, CheckStatus::InProgress, None, &report.output()) {
+                    eprintln!("azad-orchestrator: the progress of {target} cannot be shown: {e}");
+                }
+            }
+        });
+        let outcome = match ran {
+            Ok(ran) => ran.outcome,
+            Err(e) => return Ok((Conclusion::Failure, CheckOutput::line("The goal could not run", &e.to_string()))),
+        };
+        for (name, status) in &outcome.statuses {
+            let result = match status {
+                Status::Ran { result, .. } | Status::Failed { result: Some(result), .. } => result,
+                _ => continue,
+            };
+            if let Ok(output) = engine.output_of(result) {
+                report.set_output(name, &output);
+            }
+        }
+        let conclusion = match outcome.goal_holds() {
+            true => Conclusion::Success,
+            false => Conclusion::Failure,
+        };
+        Ok((conclusion, report.output()))
     }
 
     /// The check run of each goal that the event runs: made once, and kept with the run, so that a run that starts
@@ -261,37 +315,4 @@ fn trust(event: &Event, checkout: &git::Checkout) -> Trust {
         }
         trust => trust,
     }
-}
-
-/// Runs a goal, and says how it ended.
-fn run_goal(engine: &Engine, target: &str) -> (Conclusion, String) {
-    let goal = match engine.load(target, &mut |_| {}) {
-        Ok(goal) => goal,
-        Err(e) => return (Conclusion::Failure, format!("the goal cannot be loaded: {e}")),
-    };
-    if let Some(label) = goal.graph.actions.iter().find(|(_, action)| matches!(action.kind, Kind::Host { .. })) {
-        let reason =
-            format!("{} would run with the host's tools; the orchestrator runs actions only in sandboxes", label.0);
-        return (Conclusion::Failure, reason);
-    }
-    match engine.run(&goal, PARALLELISM, &mut |_| {}) {
-        Ok(report) if report.outcome.goal_holds() => (Conclusion::Success, summary(&report.outcome)),
-        Ok(report) => (Conclusion::Failure, summary(&report.outcome)),
-        Err(e) => (Conclusion::Failure, e.to_string()),
-    }
-}
-
-/// How many actions ran, came from the cache and failed, and why each failure happened.
-fn summary(outcome: &Outcome) -> String {
-    let count = |matches: fn(&Status) -> bool| outcome.statuses.values().filter(|status| matches(status)).count();
-    let ran = count(|status| matches!(status, Status::Ran { .. }));
-    let cached = count(|status| matches!(status, Status::Cached { .. }));
-    let failed = count(|status| matches!(status, Status::Failed { .. }));
-    let mut text = format!("{ran} ran, {cached} cached, {failed} failed");
-    for (label, status) in &outcome.statuses {
-        if let Status::Failed { reason, .. } = status {
-            text.push_str(&format!("\n{label}: {reason}"));
-        }
-    }
-    text
 }

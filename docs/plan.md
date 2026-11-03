@@ -44,6 +44,7 @@ Smaller items; each one is done when the monorepo no longer needs its workaround
 ### 2. Hosts
 
 The executor on machines that Azad owns.
+Azad's hosts are VMs on a developer's machine, as the development host (`dev/host/`) is: there are no remote hosts, and no host has a public address, so what people see goes through GitHub (decision 0033).
 
 - Host identity, signed releases of Azad and of the guest kernel, capacity, metrics and logs.
 - The guest kernel becomes an Azad task, so CI runs the VM tests with a kernel from the remote cache.

@@ -34,8 +34,29 @@ pub struct CheckRun {
     pub name: String,
     pub status: CheckStatus,
     pub conclusion: Option<Conclusion>,
-    /// What happened, for people.
+    /// What happened, for people: one line.
+    #[serde(default)]
+    pub title: String,
+    /// The goal's steps, and metrics, in Markdown.
     pub summary: String,
+    /// The output of the steps, in Markdown.
+    #[serde(default)]
+    pub text: String,
+}
+
+/// What a check run shows, as GitHub's `output`: a title, a summary and a text, in Markdown.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CheckOutput {
+    pub title: String,
+    pub summary: String,
+    pub text: String,
+}
+
+impl CheckOutput {
+    /// An output of one line, such as why a goal could not run.
+    pub fn line(title: &str, detail: &str) -> Self {
+        CheckOutput { title: title.to_owned(), summary: detail.to_owned(), text: String::new() }
+    }
 }
 
 impl fmt::Display for CheckRun {
@@ -48,8 +69,8 @@ impl fmt::Display for CheckRun {
         };
         let short_sha = self.head_sha.get(..12).unwrap_or(&self.head_sha);
         write!(f, "{state:<8} {} {short_sha} {}", self.repository, self.name)?;
-        if !self.summary.is_empty() {
-            write!(f, ": {}", self.summary.lines().next().unwrap_or_default())?;
+        if !self.title.is_empty() {
+            write!(f, ": {}", self.title)?;
         }
         Ok(())
     }
@@ -65,7 +86,7 @@ pub trait CheckRuns: Send + Sync + fmt::Debug {
         id: u64,
         status: CheckStatus,
         conclusion: Option<Conclusion>,
-        summary: &str,
+        output: &CheckOutput,
     ) -> io::Result<()>;
 }
 
@@ -129,7 +150,9 @@ impl CheckRuns for FakeGitHub {
             name: name.to_owned(),
             status: CheckStatus::Queued,
             conclusion: None,
+            title: String::new(),
             summary: String::new(),
+            text: String::new(),
         };
         self.write(&run)?;
         Ok(id)
@@ -141,12 +164,14 @@ impl CheckRuns for FakeGitHub {
         id: u64,
         status: CheckStatus,
         conclusion: Option<Conclusion>,
-        summary: &str,
+        output: &CheckOutput,
     ) -> io::Result<()> {
         let mut run = read(&self.path(id))?;
         run.status = status;
         run.conclusion = conclusion;
-        run.summary = summary.to_owned();
+        run.title = output.title.clone();
+        run.summary = output.summary.clone();
+        run.text = output.text.clone();
         self.write(&run)
     }
 }

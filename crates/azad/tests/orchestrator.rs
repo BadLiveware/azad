@@ -175,14 +175,14 @@ fn a_pull_request_gets_hits_from_main_and_never_writes_mains_cache() {
     let names: Vec<&str> = checks.iter().map(|run| run.name.as_str()).collect();
     assert_eq!(names, ["//:check"], "only the goals that the event names run");
     assert_eq!(checks[0].conclusion, Some(Conclusion::Success), "{}", checks[0].summary);
-    assert_eq!(checks[0].summary, "2 ran, 0 cached, 0 failed");
+    assert_eq!(checks[0].title, "2 ran, 0 cached, 0 failed");
 
     git(&f.repo, &["checkout", "-q", "-b", "change"]);
     let change = commit(&f.repo, &[("src/a.txt", "a, changed\n")], "change a");
     f.simulator(SECRET).pull_request(1, "change").unwrap();
     let checks = f.completed(&change);
     assert_eq!(checks[0].conclusion, Some(Conclusion::Success), "{}", checks[0].summary);
-    assert_eq!(checks[0].summary, "1 ran, 1 cached, 0 failed", "lint is a hit from main's run");
+    assert_eq!(checks[0].title, "1 ran, 1 cached, 0 failed", "lint is a hit from main's run");
 
     let from = |pairs: &[(&str, &'static str)]| pairs.iter().map(|(l, s)| ((*l).to_owned(), *s)).collect();
     assert_eq!(
@@ -389,5 +389,33 @@ fn check_runs_go_to_github_through_the_installation_of_the_app() {
     assert_eq!(calls[2].body["head_sha"], main);
     assert_eq!(calls[3].body["status"], "in_progress");
     assert_eq!(calls[4].body["conclusion"], "success", "{:#?}", calls[4]);
-    assert_eq!(calls[4].body["output"]["summary"], "2 ran, 0 cached, 0 failed");
+    assert_eq!(calls[4].body["output"]["title"], "2 ran, 0 cached, 0 failed");
+}
+
+/// A check run shows the goal's steps with their results and times, metrics, and the end of a failed step's output,
+/// open, so that a developer sees why it failed on the pull request (decision 0033).
+#[test]
+fn a_check_run_shows_the_steps_metrics_and_the_output_of_a_failed_step() {
+    let mut f = fixture();
+    let tasks = TASKS.replace(
+        "goal(\"check\", require = [lint, build]",
+        "broken = task(name = \"broken\", cmd = \"echo compiling; echo 'error: a | b' >&2; exit 3\", image = IMAGE)\n\
+         goal(\"check\", require = [lint, broken]",
+    );
+    let sha = commit(&f.repo, &[("tasks.star", &tasks)], "a broken step");
+    f.serve();
+    f.simulator(SECRET).push("main").unwrap();
+    let check = f.completed(&sha).remove(0);
+    assert_eq!(check.conclusion, Some(Conclusion::Failure));
+    assert_eq!(check.title, "1 ran, 0 cached, 1 failed");
+    let rows: Vec<&str> =
+        check.summary.lines().filter(|line| line.starts_with("| ✅") || line.starts_with("| ❌")).collect();
+    assert_eq!(rows.len(), 2, "{}", check.summary);
+    assert!(rows[0].starts_with("| ❌ | `//:broken` | failed: "), "{}", rows[0]);
+    assert!(rows[1].starts_with("| ✅ | `//:lint` | ran | "), "{}", rows[1]);
+    assert!(check.summary.contains("**2 steps**: 1 ran, 0 cached (0% from the cache), 1 failed"), "{}", check.summary);
+    let broken = check.text.find("<details open><summary>❌ <code>//:broken</code>").expect("the failed step is open");
+    let lint = check.text.find("<details><summary>✅ <code>//:lint</code>").expect("the step that ran is folded");
+    assert!(broken < lint, "the failed step comes first:\n{}", check.text);
+    assert!(check.text.contains("compiling\nerror: a | b\n"), "{}", check.text);
 }

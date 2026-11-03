@@ -14,7 +14,7 @@ use ring::rand::SystemRandom;
 use ring::signature::{RSA_PKCS1_SHA256, RsaKeyPair};
 use serde_json::{Value, json};
 
-use crate::orchestrator::checks::{CheckRuns, CheckStatus, Conclusion};
+use crate::orchestrator::checks::{CheckOutput, CheckRuns, CheckStatus, Conclusion};
 
 pub const GITHUB_API: &str = "https://api.github.com";
 const ACCEPT: &str = "application/vnd.github+json";
@@ -30,7 +30,6 @@ const CLOCK_SKEW: Duration = Duration::from_secs(60);
 const TOKEN_MARGIN: Duration = Duration::from_secs(5 * 60);
 /// What GitHub shows of a check run's summary; it refuses more than 65535 characters.
 const SUMMARY_LIMIT: usize = 60_000;
-const CHECK_TITLE: &str = "Azad";
 /// The user name that git uses with an installation's token over HTTPS.
 const GIT_TOKEN_USER: &str = "x-access-token";
 
@@ -180,14 +179,17 @@ impl CheckRuns for Arc<GitHubApp> {
         id: u64,
         status: CheckStatus,
         conclusion: Option<Conclusion>,
-        summary: &str,
+        output: &CheckOutput,
     ) -> io::Result<()> {
         let mut body = json!({ "status": status });
         if let Some(conclusion) = conclusion {
             body["conclusion"] = json!(conclusion);
         }
-        if !summary.is_empty() {
-            body["output"] = json!({ "title": CHECK_TITLE, "summary": shortened(summary) });
+        if !output.title.is_empty() {
+            body["output"] = json!({ "title": output.title, "summary": shortened(&output.summary) });
+        }
+        if !output.text.is_empty() {
+            body["output"]["text"] = json!(shortened(&output.text));
         }
         self.installation_call(Method::Patch, repository, &format!("/check-runs/{id}"), &body).map(|_| ())
     }

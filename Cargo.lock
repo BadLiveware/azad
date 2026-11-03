@@ -190,6 +190,7 @@ dependencies = [
  "azad-gha-runner",
  "azad-guest",
  "base64",
+ "console",
  "datafrog",
  "ed25519-dalek",
  "flate2",
